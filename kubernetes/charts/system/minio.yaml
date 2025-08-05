@@ -1,0 +1,38 @@
+# kubernetes/charts/system/minio.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: minio
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: 'https://charts.bitnami.com/bitnami'
+    chart: minio
+    targetRevision: 12.6.1
+    helm:
+      values: |
+        auth:
+          rootUser: minioadmin
+          rootPassword: "your-strong-minio-password" # !! 修改为强密码
+        persistence:
+          enabled: true
+          storageClass: "longhorn" # 关键：使用Longhorn
+          size: 20Gi # 你的磁盘有27G可用，这里分配20G
+        # 为MinIO创建路由
+        ingress:
+          enabled: true
+          ingressClassName: traefik
+          hostname: s3.gglohh.top
+          tls: true
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: minio
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

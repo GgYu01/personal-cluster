@@ -1,0 +1,19 @@
+# kubernetes/apps/root-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/your-username/personal-cluster.git' # !! 修改为你的Git仓库地址
+    targetRevision: HEAD
+    path: kubernetes/charts
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

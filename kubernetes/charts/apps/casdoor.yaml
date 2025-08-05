@@ -1,0 +1,40 @@
+# kubernetes/charts/apps/casdoor.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: casdoor
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: 'https://cdn.casdoor.com/charts/'
+    chart: casdoor
+    targetRevision: 1.346.0
+    helm:
+      values: |
+        persistence:
+          enabled: true
+          storageClass: "longhorn"
+        ingress:
+          enabled: true
+          className: traefik
+          hosts:
+            - host: casdoor.gglohh.top
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: casdoor-tls
+              hosts:
+                - casdoor.gglohh.top
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: casdoor
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,5 @@
+# kubernetes/charts/system/00-namespace-argocd.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
