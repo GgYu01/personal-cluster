@@ -21,14 +21,15 @@ spec:
           enabled: true
           className: traefik
           hosts:
-            - host: casdoor.gglohh.top
+            # 使用 Helm 值模板语法从父应用获取值
+            - host: '{{ .Values.casdoor.host }}' 
               paths:
                 - path: /
                   pathType: Prefix
           tls:
             - secretName: casdoor-tls
               hosts:
-                - casdoor.gglohh.top
+                - '{{ .Values.casdoor.host }}'
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: casdoor

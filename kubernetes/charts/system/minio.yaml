@@ -25,7 +25,8 @@ spec:
         ingress:
           enabled: true
           ingressClassName: traefik
-          hostname: s3.gglohh.top
+          # 使用 Helm 值模板语法
+          hostname: '{{ .Values.minio.host }}'
           tls: true
   destination:
     server: 'https://kubernetes.default.svc'
