@@ -11,12 +11,12 @@ spec:
   source:
     repoURL: 'https://charts.bitnami.com/bitnami'
     chart: minio
-    targetRevision: 12.6.1
+    targetRevision: 17.0.16
     helm:
       values: |
         auth:
           rootUser: minioadmin
-          rootPassword: "your-strong-minio-password" # !! 修改为强密码
+          rootPassword: "password" # !! 修改为强密码
         persistence:
           enabled: true
           storageClass: "longhorn" # 关键：使用Longhorn
@@ -27,7 +27,6 @@ spec:
           ingressClassName: traefik
           # 使用 Helm 值模板语法
           hostname: '{{ .Values.minio.host }}'
-          tls: true
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: minio

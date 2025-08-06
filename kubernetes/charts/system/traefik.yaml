@@ -9,12 +9,16 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://helm.traefik.io/traefik'
+    # CORRECTED: Using the new, authoritative repository URL from official documentation.
+    repoURL: 'https://traefik.github.io/charts'
     chart: traefik
-    targetRevision: v22.1.0
+    # UPDATED: No version specified to pull the latest stable version from the repo.
+    # For production, pinning to a specific version like '28.0.0' is recommended.
+    targetRevision: 37.0.0
     helm:
       values: |
-        # 使用K3s的Service LB暴露Traefik
+        # The default service type in the modern Traefik chart is already LoadBalancer.
+        # Explicitly setting it ensures this behavior regardless of chart defaults.
         service:
           type: LoadBalancer
   destination:
