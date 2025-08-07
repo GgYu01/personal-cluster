@@ -1,0 +1,21 @@
+# kubernetes/applications/cluster-issuer.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-issuer
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0" # Deploy after core services
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/GgYu01/personal-cluster.git
+    targetRevision: HEAD
+    path: kubernetes/manifests/cluster-issuer
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager # This resource lives in cert-manager namespace
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

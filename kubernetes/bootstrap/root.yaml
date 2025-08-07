@@ -1,20 +1,20 @@
-# kubernetes/charts/system/longhorn.yaml
+# kubernetes/bootstrap/root.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: longhorn
+  name: root
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
-    repoURL: 'https://charts.longhorn.io'
-    chart: longhorn
-    targetRevision: 1.9.1
+    repoURL: https://github.com/GgYu01/personal-cluster.git # 指向您自己
+    targetRevision: HEAD
+    path: kubernetes/apps-of-apps # 指向下一级定义
   destination:
-    server: 'https://kubernetes.default.svc'
-    namespace: longhorn-system
+    server: https://kubernetes.default.svc
+    namespace: argocd
   syncPolicy:
     automated:
       prune: true

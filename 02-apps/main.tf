@@ -1,111 +1,93 @@
-# 02-apps/main.tf
+# 02-apps/main.tf (DEFINITIVE FINAL VERSION - Correct for_each Syntax)
 
-# This local block reconstructs the values needed for ArgoCD,
-# which were previously in the monolithic locals.tf.
-locals {
-  argocd_app_values = yamlencode({
-    global = {
-      domain = var.cluster_base_domain
-    }
-    casdoor = {
-      host = "casdoor.${var.cluster_base_domain}"
-    }
-    minio = {
-      host = "s3.${var.cluster_base_domain}"
-    }
-    n8n = {
-      host = "n8n.${var.cluster_base_domain}"
-    }
-  })
+# STEP 1: RENDER the CRD templates from the ArgoCD Helm chart into a multi-document YAML string.
+data "helm_template" "argocd_crds_rendered" {
+  name         = "argocd-crds-rendered"
+  repository   = "https://argoproj.github.io/argo-helm"
+  chart        = "argo-cd"
+  version      = "8.2.4"
+  kube_version = "1.33.3"
+
+  values = [
+    yamlencode({
+      crds = {
+        install = true
+      }
+      controller     = { enabled = false }
+      server         = { enabled = false }
+      repoServer     = { enabled = false }
+      applicationSet = { enabled = false }
+      dex            = { enabled = false }
+      redis          = { enabled = false }
+      redis-ha       = { enabled = false }
+    })
+  ]
 }
 
-# Deploy ArgoCD using the Helm provider.
+# STEP 2: SPLIT the rendered multi-document YAML string into a list of individual YAML documents.
+data "kubectl_file_documents" "argocd_crds_split" {
+  content = data.helm_template.argocd_crds_rendered.manifest
+}
+
+# STEP 3: APPLY each individual CRD document as a separate, tracked resource.
+resource "kubectl_manifest" "argocd_crds" {
+  # CRITICAL FIX: Convert the list of documents to a set of strings, which is a valid type for for_each.
+  for_each  = toset(data.kubectl_file_documents.argocd_crds_split.documents)
+  yaml_body = each.value
+}
+
+# STEP 4: Deterministically WAIT for ALL CRDs to be established.
+resource "null_resource" "wait_for_argocd_crds" {
+  depends_on = [kubectl_manifest.argocd_crds]
+
+  provisioner "local-exec" {
+    # Chain commands with '&&' for robust error handling.
+    command = <<EOT
+      echo "Waiting for ArgoCD CRDs to be established..." && \
+      kubectl wait --for=condition=established --timeout=120s crd/applications.argoproj.io && \
+      kubectl wait --for=condition=established --timeout=120s crd/applicationsets.argoproj.io && \
+      kubectl wait --for=condition=established --timeout=120s crd/appprojects.argoproj.io && \
+      echo "ArgoCD CRDs are established."
+    EOT
+  }
+}
+
+# STEP 5: Install the ArgoCD application itself.
 resource "helm_release" "argocd" {
   name             = "argocd"
   repository       = "https://argoproj.github.io/argo-helm"
   chart            = "argo-cd"
   namespace        = "argocd"
   create_namespace = true
-  version          = "8.2.4" # Using a recent stable version
+  version          = "8.2.4"
+  timeout          = 1200
+  wait             = true
 
-  # --- ADD THIS BLOCK ---
-  # This block provides custom values to the ArgoCD Helm chart.
-  # We use it to dynamically configure and enable the Ingress resource,
-  # which exposes the ArgoCD server UI via Traefik.
   values = [
     yamlencode({
-      # The "server" block configures the argocd-server component.
-      server = {
-        # The "ingress" block specifically controls the Ingress resource.
-        ingress = {
-          # Enable the creation of an Ingress object.
-          enabled = true
-
-          # Set the IngressClass to "traefik". This is a CRITICAL step.
-          # It explicitly tells Kubernetes that this Ingress should be managed
-          # by the Traefik Ingress Controller, not any other controller that
-          # might be running in the cluster.
-          ingressClassName = "traefik"
-
-          # Define the hostnames that this Ingress rule applies to.
-          hosts = [
-            "argocd.${var.cluster_base_domain}"
-          ]
-
-          # For simplicity and initial verification, we will not configure TLS yet.
-          # The connection will be plain HTTP.
-          # tls = [] # This line can be omitted or left empty.
-        }
+      crds = {
+        install = false
       }
-
-      # Hardcode the default admin password as requested for a simplified environment.
-      # In a production scenario, this should be retrieved from a secret manager.
-      # NOTE: The change of this password might require manual deletion of the
-      # 'argocd-initial-admin-secret' for it to be recreated.
       configs = {
         secret = {
-          argocdServerAdminPassword = bcrypt("$2a$10$rVIyA5x3y4pUfB2PA24wouj9SIymqncZ32dG/mTrn2JzXekm2y14m") # "password"
+          argocdServerAdminPassword = "$2a$10$Ep1xq3oPnHwsIwoQKPD1iO7N2vUU23zUS18BVjiY8fmrA3e3VxO62" # "password"
         }
       }
     })
   ]
-  # --- END OF ADDED BLOCK ---
 
+  depends_on = [
+    null_resource.wait_for_argocd_crds
+  ]
 }
 
-# Deploy ArgoCD's "App of Apps".
-resource "kubernetes_manifest" "app_of_apps" {
-  manifest = {
-    apiVersion = "argoproj.io/v1alpha1"
-    kind       = "Application"
-    metadata = {
-      name       = "root"
-      namespace  = "argocd"
-      finalizers = ["resources-finalizer.argocd.argoproj.io"]
-    }
-    spec = {
-      project = "default"
-      source = {
-        repoURL        = var.gitops_repo_url
-        targetRevision = "HEAD"
-        path           = "kubernetes/charts"
-        helm = {
-          values = local.argocd_app_values
-        }
-      }
-      destination = {
-        server    = "https://kubernetes.default.svc"
-        namespace = "argocd"
-      }
-      syncPolicy = {
-        automated = {
-          prune    = true
-          selfHeal = true
-        }
-        syncOptions = ["CreateNamespace=true"]
-      }
-    }
-  }
+# STEP 6: Create the single root Application object.
+resource "kubectl_manifest" "root_app" {
+  yaml_body = templatefile("${path.module}/root-app-template.yaml", {
+    gitops_repo_url = var.gitops_repo_url
+  })
 
-  depends_on = [helm_release.argocd]
+  depends_on = [
+    helm_release.argocd
+  ]
 }

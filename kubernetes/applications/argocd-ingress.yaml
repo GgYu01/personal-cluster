@@ -1,0 +1,21 @@
+# kubernetes/applications/argocd-ingress.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-ingress
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1" # Deploy after issuer
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/GgYu01/personal-cluster.git
+    targetRevision: HEAD
+    path: kubernetes/manifests/argocd-ingress
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

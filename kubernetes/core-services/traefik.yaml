@@ -1,0 +1,48 @@
+# kubernetes/core-services/traefik.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: traefik
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5" # Deploy after cert-manager
+spec:
+  project: default
+  source:
+    repoURL: https://traefik.github.io/charts
+    chart: traefik
+    targetRevision: 37.0.0
+    helm:
+      releaseName: traefik
+      values: |
+        additionalArguments:
+          - "--api.dashboard=true"
+          - "--api.insecure=true" # Allows access to dashboard via port-forward
+          - "--entrypoints.web.address=:8000"
+          - "--entrypoints.websecure.address=:8443"
+          - "--providers.kubernetesingress.ingressclass=traefik"
+          - "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
+          - "--certificatesresolvers.cloudflare.acme.email=your-email@example.com"
+          - "--certificatesresolvers.cloudflare.acme.storage=/data/acme.json"
+        ports:
+          web:
+            redirectTo: websecure
+          websecure:
+            tls:
+              enabled: true
+        service:
+          type: LoadBalancer
+        persistence:
+          enabled: true
+          name: data
+          size: 128Mi
+          path: /data
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: traefik
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
