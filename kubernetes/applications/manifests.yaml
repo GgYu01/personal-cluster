@@ -1,21 +1,23 @@
-# kubernetes/applications/cluster-issuer.yaml
+# kubernetes/applications/manifests.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: cluster-issuer
+  name: core-manifests
   namespace: argocd
-  annotations:
-    argocd.argoproj.io/sync-wave: "0"
 spec:
   project: default
   source:
     repoURL: https://github.com/GgYu01/personal-cluster.git
     targetRevision: HEAD
-    path: kubernetes/manifests/cluster-issuer
+    # This app now manages EVERYTHING under the manifests directory.
+    path: kubernetes/manifests
+    # Enable recursive scanning
+    directory:
+      recurse: true
   destination:
     server: https://kubernetes.default.svc
-    # 目的地命名空间在这里不重要，因为资源自身定义了命名空间
-    namespace: argocd
+    # The namespace here is a default, but resources define their own.
+    namespace: default
   syncPolicy:
     automated:
       prune: true

@@ -1,4 +1,4 @@
-# kubernetes/core-services/traefik.yaml (Definitive Final Version v16)
+# kubernetes/core-services/traefik.yaml (Definitive Final Version v17)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -12,37 +12,27 @@ spec:
     targetRevision: 37.0.0
     helm:
       values: |
-        # CRITICAL CHANGE: Disable the Service entirely.
-        # We will expose Traefik directly via HostPorts on the Deployment.
+        # Use LoadBalancer, the K3s-native way to expose services.
         service:
-          enabled: false
-
-        # CRITICAL CHANGE: Define HostPorts directly on the Deployment.
-        # This creates the most direct path from the host to the Traefik pod, bypassing svclb.
+          enabled: true
+          type: LoadBalancer
+        
+        # We do not need HostPorts anymore.
         ports:
           web:
             port: 8000
-            hostPort: 80
-            protocol: TCP
           websecure:
             port: 8443
-            hostPort: 443
-            protocol: TCP
             tls:
               enabled: true
         
-        # Enable providers for standard Ingress
+        # Standard providers and IngressClass setup
         providers:
           kubernetesIngress:
             enabled: true
-          kubernetesCRD:
-            enabled: true # Keep this for future flexibility
-
-        # Create the default IngressClass
         ingressClass:
           enabled: true
           isDefaultClass: true
-
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: traefik
