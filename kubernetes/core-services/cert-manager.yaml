@@ -1,4 +1,4 @@
-# kubernetes/core-services/cert-manager.yaml (Definitive Final Version v5)
+# kubernetes/core-services/cert-manager.yaml (Definitive Final Version v6)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -23,25 +23,20 @@ spec:
         prometheus:
           enabled: false
 
-        # --- START: CRITICAL FIX FOR TRAEFIK & INGRESSROUTE INTEGRATION ---
-
-        # 1. Enable the feature gate for Gateway API support in the controller.
+        # --- START: CRITICAL FIX FOR TRAEFIK & INGRESSROUTE INTEGRATION (v6) ---
+        # This is the most robust method: controlling everything via command-line arguments.
+        # It avoids inconsistencies between different chart versions' values.yaml structure.
         extraArgs:
+          # 1. Enable the feature gate for Gateway API support
           - --feature-gates=ExperimentalGatewayAPISupport=true
-        
-        # 2. CRITICAL: Explicitly enable the 'gateway-shim' controller itself.
-        # This controller is disabled by default and is required to process Gateway API
-        # resources, which includes Traefik's IngressRoutes.
-        gateway-shim:
-          enabled: true
-
-        # The 'ingress-shim' can remain configured for default behavior.
-        ingressShim:
-          defaultIssuerName: cloudflare
-          defaultIssuerKind: ClusterIssuer
-          defaultIssuerGroup: cert-manager.io
           
-        # --- END: CRITICAL FIX FOR TRAEFIK & INGRESSROUTE INTEGRATION ---
+          # 2. CRITICAL: Explicitly define which controllers to enable.
+          # By providing this list, we override the chart's default list of controllers.
+          # We ensure 'gateway-shim' is included.
+          - --controllers=certificates-issuing,certificates-key-manager,certificates-metrics,certificates-readiness,certificates-request-manager,certificates-revision-manager,certificates-trigger,challenges,clusterissuers,issuers,orders,ingress-shim,gateway-shim
+
+        # We no longer need the 'gateway-shim' block as we control it via extraArgs.
+        # --- END: CRITICAL FIX FOR TRAEFIK & INGRESSROUTE INTEGRATION (v6) ---
 
   destination:
     server: https://kubernetes.default.svc
