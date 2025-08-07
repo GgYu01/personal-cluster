@@ -6,9 +6,10 @@ metadata:
 spec:
   acme:
     email: 1405630484@qq.com
-    server: https://acme-v02.api.letsencrypt.org/directory
+    # CRITICAL CHANGE: Point to the Let's Encrypt staging server for testing
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
     privateKeySecretRef:
-      name: letsencrypt-private-key
+      name: letsencrypt-staging-private-key # Use a different secret for staging
     solvers:
     - dns01:
         cloudflare:

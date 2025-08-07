@@ -1,0 +1,1 @@
+tail -n +1 01-infra/*.tf 01-infra/kubeconfig.tpl 02-apps/*.tf 02-apps/root-app-template.yaml kubernetes/applications/* kubernetes/apps-of-apps/* kubernetes/bootstrap/* kubernetes/core-services/* kubernetes/manifests/argocd-ingress/* kubernetes/manifests/cluster-issuer/* kubernetes/manifests/traefik-rbac/*  >  /root/log.log  2>&1

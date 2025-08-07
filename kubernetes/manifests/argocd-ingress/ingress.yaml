@@ -1,31 +1,24 @@
-# kubernetes/manifests/argocd-ingress/ingress.yaml (Definitive Final Version v10)
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+# kubernetes/manifests/argocd-ingress/ingress.yaml
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
 metadata:
-  name: argocd-server-ingress
+  name: argocd-server-https
   namespace: argocd
-  annotations:
-    # 告诉 Cert-Manager 使用哪个 ClusterIssuer
-    cert-manager.io/cluster-issuer: cloudflare
-    # 告诉 Traefik 这个路由需要 TLS
-    traefik.ingress.kubernetes.io/router.tls: "true"
-    # CRITICAL FIX: 告诉 Traefik 与后端服务通信时使用 HTTPS 协议
-    traefik.ingress.kubernetes.io/router.services.scheme: https
 spec:
-  ingressClassName: traefik
-  rules:
-  - host: "argocd.core01.prod.gglohh.top"
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: argocd-server
-            port:
-              # 仍然指向 argocd-server 的 https 端口 (通常是 443)
-              name: https
+  entryPoints:
+    # Use the default HTTPS entrypoint configured by K3s
+    - websecure
+  routes:
+    - match: Host(`argocd.core01.prod.gglohh.top`)
+      kind: Rule
+      services:
+        # Forward traffic to the ArgoCD server service on its HTTP port
+        - name: argocd-server
+          port: 80
   tls:
-  - hosts:
-    - "argocd.core01.prod.gglohh.top"
-    secretName: argocd-server-tls
+    # This instructs Traefik to use a cert-manager issuer to obtain a certificate.
+    # The name MUST EXACTLY match the 'metadata.name' of your ClusterIssuer.
+    certResolver: cloudflare
+    # This defines the name of the Kubernetes Secret where the certificate will be stored.
+    # Cert-Manager will create it, and Traefik will read from it.
+    secretName: argocd-server-tls-staging

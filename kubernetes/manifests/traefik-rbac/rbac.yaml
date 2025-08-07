@@ -14,8 +14,9 @@ metadata:
   name: traefik-secret-reader-binding
 subjects:
 - kind: ServiceAccount
+  # CRITICAL CHANGE: Point to the ServiceAccount of K3s's built-in Traefik
   name: traefik
-  namespace: traefik
+  namespace: kube-system
 roleRef:
   kind: ClusterRole
   name: traefik-secret-reader
