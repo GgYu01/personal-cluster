@@ -1,4 +1,4 @@
-# kubernetes/core-services/traefik.yaml (Definitive Final Version)
+# kubernetes/core-services/traefik.yaml (Definitive Final Version v16)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -9,34 +9,40 @@ spec:
   source:
     repoURL: 'https://traefik.github.io/charts'
     chart: traefik
-    targetRevision: 37.0.0 # Pinning version for stability
+    targetRevision: 37.0.0
     helm:
       values: |
-        # 明确创建名为 'traefik' 的 IngressClass 资源
-        ingressClass:
-          enabled: true
-          isDefaultClass: true # 将其设为集群默认
-        
-        # 启用 provider 来监听标准的 Ingress 资源
-        providers:
-          kubernetesIngress:
-            enabled: true
-            allowCrossNamespace: true
-          # 我们仍然可以保留 CRD provider，以备将来使用
-          kubernetesCRD:
-            enabled: true
-            allowAllNamespaces: true
-        
-        # 定义入口点
+        # CRITICAL CHANGE: Disable the Service entirely.
+        # We will expose Traefik directly via HostPorts on the Deployment.
+        service:
+          enabled: false
+
+        # CRITICAL CHANGE: Define HostPorts directly on the Deployment.
+        # This creates the most direct path from the host to the Traefik pod, bypassing svclb.
         ports:
           web:
             port: 8000
-            # 建议：可以添加重定向到 HTTPS
-            # redirectTo: websecure
+            hostPort: 80
+            protocol: TCP
           websecure:
             port: 8443
+            hostPort: 443
+            protocol: TCP
             tls:
               enabled: true
+        
+        # Enable providers for standard Ingress
+        providers:
+          kubernetesIngress:
+            enabled: true
+          kubernetesCRD:
+            enabled: true # Keep this for future flexibility
+
+        # Create the default IngressClass
+        ingressClass:
+          enabled: true
+          isDefaultClass: true
+
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: traefik
