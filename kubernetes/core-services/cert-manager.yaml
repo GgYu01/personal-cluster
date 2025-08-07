@@ -17,9 +17,22 @@ spec:
       values: |
         installCRDs: true
         global:
-          logLevel: 2
+          logLevel: 2 # 设置为2以获得更详细的日志进行调试
         prometheus:
           enabled: false
+        # --- START: CRITICAL FIX FOR TRAEFIK INTEGRATION ---
+        extraArgs:
+          - --enable-gateway-api # 某些新版本需要此项来启用对新路由资源的支持
+          # 明确告诉 ingress-shim 我们在使用 Traefik
+          - --controller-group=cert-manager.io
+        ingressShim:
+          # 默认情况下，ingress-shim 只处理标准的 Ingress。
+          # 以下配置对于某些旧版本的 chart 是必须的，但对于新版本，
+          # extraArgs 可能更重要。我们两者都包含以确保兼容性。
+          defaultIssuerName: cloudflare
+          defaultIssuerKind: ClusterIssuer
+          defaultIssuerGroup: cert-manager.io
+        # --- END: CRITICAL FIX FOR TRAEFIK INTEGRATION ---
   destination:
     server: https://kubernetes.default.svc
     namespace: cert-manager
