@@ -17,7 +17,7 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     # The namespace here is a default, but resources define their own.
-    namespace: default
+    namespace: argocd
   syncPolicy:
     automated:
       prune: true
