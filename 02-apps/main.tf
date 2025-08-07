@@ -1,39 +1,43 @@
-# 02-apps/main.tf (DEFINITIVE FINAL VERSION - Correct Helm-based deployment)
+# 02-apps/main.tf (DEFINITIVE FINAL VERSION v2 - Correct Helm-based deployment with CRD separation)
 
 # This file implements a robust, two-stage installation for ArgoCD using the helm_release provider.
-# Stage 1: Install only the CRDs and wait for them to be established.
-# Stage 2: Install the rest of the ArgoCD application, depending on the successful completion of Stage 1.
+# The key change is to use the ArgoCD chart's dedicated `crds.install=true` feature in a way
+# that avoids creating non-CRD resources in the first stage.
 
-# --- STAGE 1: Install ArgoCD CRDs ---
-# This release only installs the Custom Resource Definitions.
+# --- STAGE 1: Install ArgoCD CRDs ONLY ---
+# This release *only* installs the Custom Resource Definitions.
+# We achieve this by enabling `crds.install` and disabling almost everything else
+# at the top level of the Helm chart values.
 resource "helm_release" "argocd_crds" {
   name             = "argocd-crds"
   repository       = "https://argoproj.github.io/argo-helm"
   chart            = "argo-cd"
-  version          = "8.2.4" # Using the version you specified
+  version          = "8.2.4"
   namespace        = "argocd"
-  create_namespace = true # Ensure the namespace exists before installation
+  create_namespace = true
 
-  # Values to instruct the chart to ONLY install CRDs.
+  # CRITICAL FIX: Use a minimal set of values. The chart is designed
+  # such that if `crds.install` is true, it should only install CRDs if other
+  # components are disabled. We will explicitly disable them to be certain.
   values = [
     yamlencode({
       crds = {
         install = true
+        # Keep the CRDs even if this Helm release is uninstalled
+        keep = true
       }
-      # Disable all other components for this release
+      # Explicitly disable all other components to prevent ownership conflicts.
       controller     = { enabled = false }
       server         = { enabled = false }
       repoServer     = { enabled = false }
-      applicationSet = { enabled = false }
       dex            = { enabled = false }
       redis          = { enabled = false }
       "redis-ha"     = { enabled = false }
+      applicationSet = { enabled = false }
       notifications  = { enabled = false }
     })
   ]
 
-  # This is crucial for idempotency and upgrades.
-  # It tells Terraform to wait until the Helm release is fully deployed.
   wait = true
 }
 
@@ -49,47 +53,38 @@ resource "helm_release" "argocd" {
   repository       = "https://argoproj.github.io/argo-helm"
   chart            = "argo-cd"
   version          = "8.2.4"
-  namespace        = "argocd" # Deploy into the same, already-created namespace
-  create_namespace = false    # Namespace is already created by the CRD release
+  namespace        = "argocd"
+  create_namespace = false # Namespace is already created
 
   # Values for the main application.
   values = [
     yamlencode({
-      # CRITICAL: Do NOT reinstall CRDs. They are managed by the first release.
+      # CRITICAL: Do NOT let this release manage CRDs.
       crds = {
         install = false
       }
-      # Set the admin password to "password" as you requested.
-      # The value is the bcrypt hash of "password".
+      # Set the admin password to "password".
       configs = {
         secret = {
-          argocdServerAdminPassword = "$2a$10$r8i.p3qV5.IqLgqvB..31eL9g/XyJc5lqJzCrHw5TKSg2Kx5i/fWu" # bcrypt hash for "password"
+          # bcrypt hash for "password"
+          argocdServerAdminPassword = "$2a$10$r8i.p3qV5.IqLgqvB..31eL9g/XyJc5lqJzCrHw5TKSg2Kx5i/fWu"
         }
-        # You can add other ArgoCD configurations here under 'cm' or 'params' if needed.
       }
-      # Ensure all components are enabled (this is the default, but explicit is better)
-      controller     = { enabled = true }
-      server         = { enabled = true }
-      repoServer     = { enabled = true }
-      applicationSet = { enabled = true }
-      dex            = { enabled = true } # Dex is enabled by default in the chart
-      redis          = { enabled = true } # Redis is enabled by default in the chart
+      # All other components use their default (enabled) state.
     })
   ]
 
-  timeout = 1200 # Increase timeout to allow for image pulling and pod startup
-  wait    = true # Wait for the main application to be fully ready
+  timeout = 1200
+  wait    = true
 }
 
 # --- STAGE 3: Create the Root Application ---
 # This resource creates the single 'root' Application CR that bootstraps your GitOps repository.
-# It depends on the main ArgoCD release being ready.
 resource "kubectl_manifest" "root_app" {
   depends_on = [
     helm_release.argocd
   ]
 
-  # This uses the template file you already have.
   yaml_body = templatefile("${path.module}/root-app-template.yaml", {
     gitops_repo_url = var.gitops_repo_url
   })
