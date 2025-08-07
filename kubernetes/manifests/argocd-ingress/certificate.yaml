@@ -1,0 +1,22 @@
+# kubernetes/manifests/argocd-ingress/certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  # The name of this resource. It's for our reference.
+  name: argocd-server-tls-staging
+  # It MUST be in the same namespace as the IngressRoute that will use it.
+  namespace: argocd
+spec:
+  # This MUST match the secretName defined in the IngressRoute's tls block.
+  secretName: argocd-server-tls-staging
+  duration: 2160h # 90d
+  renewBefore: 360h # 15d
+  # The list of domain names this certificate is for.
+  dnsNames:
+  - argocd.core01.prod.gglohh.top
+  # Reference to the ClusterIssuer we want to use.
+  issuerRef:
+    # We are using a ClusterIssuer, not a namespaced Issuer.
+    kind: ClusterIssuer
+    # This MUST match the name of the ClusterIssuer we created.
+    name: cloudflare-staging

@@ -62,17 +62,3 @@ resource "terraform_data" "k3s_install" {
     ]
   }
 }
-
-# --- Kubeconfig Retrieval and Processing ---
-# Fetches the kubeconfig from the server after installation.
-data "remote_file" "k3s_kubeconfig_remote" {
-  # This data source depends on the k3s_install resource completing successfully.
-  depends_on = [terraform_data.k3s_install]
-
-  conn {
-    host        = var.vps_ip
-    user        = var.ssh_user
-    private_key = file(pathexpand(var.ssh_private_key_path))
-  }
-  path = "/etc/rancher/k3s/k3s.yaml"
-}
