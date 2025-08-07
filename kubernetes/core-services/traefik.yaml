@@ -11,23 +11,35 @@ spec:
   source:
     repoURL: 'https://traefik.github.io/charts'
     chart: traefik
-    targetRevision: 37.0.0
+    targetRevision: 37.0.0 # <--- 请确认此版本是否正确，或使用最新版
     helm:
       values: |
         # 启用 dashboard，但默认不创建 IngressRoute
         dashboard:
           enabled: true
+        
+        # 在 providers.kubernetesCRD 中定义入口点
+        # 这告诉 Traefik 它应该监听哪些端口
+        ports:
+          web:
+            port: 8000
+          websecure:
+            port: 8443
+            tls:
+              enabled: true
+
         # 允许所有命名空间的 IngressRoute
         providers:
           kubernetesCRD:
             allowAllNamespaces: true
-        # 允许跨命名空间的 IngressRoute
-        providers:
+          # kubernetesIngress 也可以保留，以防万一
           kubernetesIngress:
             allowCrossNamespace: true
+        
         # 禁用默认的 IngressClass，因为我们将手动管理
         ingressClass:
           enabled: false
+        
         # 禁用 IngressRoute for dashboard，我们将手动创建
         ingressRoute:
           dashboard:
@@ -43,22 +55,4 @@ spec:
       - CreateNamespace=true
       - RespectIgnoreDifferences=true
       - ApplyOutOfSyncOnly=true
-    # --- 这是关键的修复 ---
-    # 使用 Sync Hook 在主应用同步之前，从相同的 Helm Chart 中提取并应用 CRD。
-    # 这确保了 IngressRoute 等 CRD 绝对存在。
-    hooks:
-    - name: PreSyncCRDs
-      type: PreSync
-      helm:
-        chart: traefik
-        repoURL: 'https://traefik.github.io/charts'
-        targetRevision: v25.0.0
-        # 只渲染 CRD 模板
-        values: |
-          crds:
-            install: true
-          # 禁用其他所有组件的渲染
-          deployment:
-            enabled: false
-          service:
-            enabled: false
+# --- REMOVE THE ENTIRE 'hooks' SECTION FROM HERE ---
