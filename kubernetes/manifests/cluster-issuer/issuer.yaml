@@ -2,14 +2,13 @@
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: cloudflare
+  name: cloudflare-staging
 spec:
   acme:
     email: 1405630484@qq.com
-    # CRITICAL CHANGE: Point to the Let's Encrypt staging server for testing
     server: https://acme-staging-v02.api.letsencrypt.org/directory
     privateKeySecretRef:
-      name: letsencrypt-staging-private-key # Use a different secret for staging
+      name: letsencrypt-staging-private-key
     solvers:
     - dns01:
         cloudflare:
