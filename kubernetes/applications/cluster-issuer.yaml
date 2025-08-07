@@ -1,21 +1,52 @@
-# kubernetes/applications/cluster-issuer.yaml
+# kubernetes/applications/cluster-issuer.yaml (Definitive Final Version v8)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: cluster-issuer
   namespace: argocd
   annotations:
-    argocd.argoproj.io/sync-wave: "0" # Deploy after core services
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   project: default
+  # CRITICAL CHANGE: Use 'source.inline'
   source:
-    repoURL: https://github.com/GgYu01/personal-cluster.git
-    targetRevision: HEAD
-    path: kubernetes/manifests/cluster-issuer
+    inline:
+      # Embed the Secret manifest
+      - apiVersion: v1
+        kind: Secret
+        metadata:
+          name: cloudflare-api-token-secret
+          namespace: cert-manager # Secret must be in cert-manager namespace
+        type: Opaque
+        stringData:
+          api-token: "vi7hkPq4FwD5ttV4dvR_IoNVEJSphydRPcT0LVD-"
+      # Embed the ClusterIssuer manifest
+      - apiVersion: cert-manager.io/v1
+        kind: ClusterIssuer
+        metadata:
+          name: cloudflare
+        spec:
+          acme:
+            email: 1405630484@qq.com
+            server: https://acme-v02.api.letsencrypt.org/directory
+            privateKeySecretRef:
+              name: letsencrypt-private-key
+            solvers:
+            - dns01:
+                cloudflare:
+                  email: 1405630484@qq.com
+                  apiTokenSecretRef:
+                    name: cloudflare-api-token-secret
+                    key: api-token
   destination:
+    # Destination for an App with inline content can be any namespace,
+    # as the individual resources define their own namespaces.
+    # We'll use 'argocd' for consistency.
     server: https://kubernetes.default.svc
-    namespace: cert-manager # This resource lives in cert-manager namespace
+    namespace: argocd
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
