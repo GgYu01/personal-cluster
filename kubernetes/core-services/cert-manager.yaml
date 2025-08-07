@@ -1,11 +1,11 @@
-# kubernetes/core-services/cert-manager.yaml (Definitive Final Version v6)
+# kubernetes/core-services/cert-manager.yaml (Definitive Final Version)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: cert-manager
   namespace: argocd
   annotations:
-    argocd.argoproj.io/sync-wave: "-10" # Deploy first
+    argocd.argoproj.io/sync-wave: "-10"
 spec:
   project: default
   source:
@@ -16,28 +16,10 @@ spec:
       releaseName: cert-manager
       values: |
         installCRDs: true
-        
-        global:
-          logLevel: 2 
-        
+        # 不需要任何特殊的 extraArgs 或 shim 配置
+        # ingress-shim 默认会处理标准的 Ingress 资源
         prometheus:
           enabled: false
-
-        # --- START: CRITICAL FIX FOR TRAEFIK & INGRESSROUTE INTEGRATION (v6) ---
-        # This is the most robust method: controlling everything via command-line arguments.
-        # It avoids inconsistencies between different chart versions' values.yaml structure.
-        extraArgs:
-          # 1. Enable the feature gate for Gateway API support
-          - --feature-gates=ExperimentalGatewayAPISupport=true
-          
-          # 2. CRITICAL: Explicitly define which controllers to enable.
-          # By providing this list, we override the chart's default list of controllers.
-          # We ensure 'gateway-shim' is included.
-          - --controllers=certificates-issuing,certificates-key-manager,certificates-metrics,certificates-readiness,certificates-request-manager,certificates-revision-manager,certificates-trigger,challenges,clusterissuers,issuers,orders,ingress-shim,gateway-shim
-
-        # We no longer need the 'gateway-shim' block as we control it via extraArgs.
-        # --- END: CRITICAL FIX FOR TRAEFIK & INGRESSROUTE INTEGRATION (v6) ---
-
   destination:
     server: https://kubernetes.default.svc
     namespace: cert-manager

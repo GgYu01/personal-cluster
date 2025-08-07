@@ -1,0 +1,31 @@
+# kubernetes/manifests/argocd-ingress/ingress.yaml (Definitive Final Version)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-ingress
+  namespace: argocd
+  annotations:
+    # 告诉 Cert-Manager 使用哪个 ClusterIssuer
+    cert-manager.io/cluster-issuer: cloudflare
+    # 告诉 Traefik 这个 Ingress 需要 TLS
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  # 明确指定 IngressClass，确保由我们的 Traefik 处理
+  ingressClassName: traefik
+  rules:
+  - host: "argocd.core01.prod.gglohh.top"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argocd-server
+            port:
+              # 将流量转发到 ArgoCD Server 的 HTTPS 端口
+              name: https
+  tls:
+  # Cert-Manager 将会填充这个 secret
+  - hosts:
+    - "argocd.core01.prod.gglohh.top"
+    secretName: argocd-server-tls

@@ -1,49 +1,42 @@
-# kubernetes/core-services/traefik.yaml
+# kubernetes/core-services/traefik.yaml (Definitive Final Version)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: traefik
   namespace: argocd
-  finalizers:
-  - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
     repoURL: 'https://traefik.github.io/charts'
     chart: traefik
-    targetRevision: 37.0.0 # <--- 请确认此版本是否正确，或使用最新版
+    targetRevision: 37.0.0 # Pinning version for stability
     helm:
       values: |
-        # 启用 dashboard，但默认不创建 IngressRoute
-        dashboard:
+        # 明确创建名为 'traefik' 的 IngressClass 资源
+        ingressClass:
           enabled: true
+          isDefaultClass: true # 将其设为集群默认
         
-        # 在 providers.kubernetesCRD 中定义入口点
-        # 这告诉 Traefik 它应该监听哪些端口
+        # 启用 provider 来监听标准的 Ingress 资源
+        providers:
+          kubernetesIngress:
+            enabled: true
+            allowCrossNamespace: true
+          # 我们仍然可以保留 CRD provider，以备将来使用
+          kubernetesCRD:
+            enabled: true
+            allowAllNamespaces: true
+        
+        # 定义入口点
         ports:
           web:
             port: 8000
+            # 建议：可以添加重定向到 HTTPS
+            # redirectTo: websecure
           websecure:
             port: 8443
             tls:
               enabled: true
-
-        # 允许所有命名空间的 IngressRoute
-        providers:
-          kubernetesCRD:
-            allowAllNamespaces: true
-          # kubernetesIngress 也可以保留，以防万一
-          kubernetesIngress:
-            allowCrossNamespace: true
-        
-        # 禁用默认的 IngressClass，因为我们将手动管理
-        ingressClass:
-          enabled: false
-        
-        # 禁用 IngressRoute for dashboard，我们将手动创建
-        ingressRoute:
-          dashboard:
-            enabled: false
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: traefik
@@ -53,6 +46,3 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
-      - RespectIgnoreDifferences=true
-      - ApplyOutOfSyncOnly=true
-# --- REMOVE THE ENTIRE 'hooks' SECTION FROM HERE ---
