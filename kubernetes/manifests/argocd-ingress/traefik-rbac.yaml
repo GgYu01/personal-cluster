@@ -1,4 +1,5 @@
-# kubernetes/core-services/traefik-rbac.yaml
+# kubernetes/manifests/argocd-ingress/traefik-rbac.yaml
+# This ClusterRole gives permission to read Secrets across all namespaces.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -8,14 +9,15 @@ rules:
   resources: ["secrets"]
   verbs: ["get", "list", "watch"]
 ---
+# This binding applies the role to Traefik's ServiceAccount.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: traefik-secret-reader-binding
 subjects:
 - kind: ServiceAccount
-  name: traefik # Traefik Helm chart 创建的 ServiceAccount 的默认名称
-  namespace: traefik
+  name: traefik # Default name for Traefik's ServiceAccount
+  namespace: traefik # The namespace where Traefik is running
 roleRef:
   kind: ClusterRole
   name: traefik-secret-reader
