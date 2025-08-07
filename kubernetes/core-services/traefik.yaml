@@ -1,0 +1,54 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: traefik
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://traefik.github.io/charts
+    chart: traefik
+    targetRevision: 37.0.0
+    helm:
+      values: |
+        # Install all the necessary CRDs. This is critical.
+        crds:
+          install: true
+        
+        # Use hostPorts to directly expose Traefik on the node's ports.
+        # This is the most direct method when K3s's servicelb is disabled.
+        ports:
+          web:
+            port: 8000
+            hostPort: 80
+          websecure:
+            port: 8443
+            hostPort: 443
+            tls:
+              enabled: true
+        
+        # Explicitly set the service type to ClusterIP as we don't need a LoadBalancer anymore.
+        service:
+          type: ClusterIP
+
+        # Add tolerations for control-plane nodes if necessary,
+        # as K3s master nodes often have taints.
+        tolerations:
+          - key: "CriticalAddonsOnly"
+            operator: "Exists"
+          - key: "node-role.kubernetes.io/control-plane"
+            operator: "Exists"
+            effect: "NoSchedule"
+          - key: "node-role.kubernetes.io/master"
+            operator: "Exists"
+            effect: "NoSchedule"
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: traefik
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true

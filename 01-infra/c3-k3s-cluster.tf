@@ -53,8 +53,8 @@ resource "terraform_data" "k3s_install" {
 
   provisioner "remote-exec" {
     inline = [
-      "echo '==> [K3S-INSTALL] Installing K3s server version ${var.k3s_version} with a double guarantee to disable Traefik...'",
-      "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${var.k3s_version}' INSTALL_K3S_EXEC='--disable=traefik' sh -",
+      "echo '==> [K3S-INSTALL] Installing K3s server with Traefik and ServiceLB absolutely disabled...'",
+      "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${var.k3s_version}' INSTALL_K3S_EXEC='server --disable=traefik --disable=servicelb' sh -s -",
       "echo '==> [K3S-VERIFY] Waiting for k3s.yaml to be created...'",
       "timeout 60s bash -c 'until [ -f /etc/rancher/k3s/k3s.yaml ]; do sleep 2; done'",
       "echo '==> [K3S-SETUP] Setting kubeconfig permissions...'",
