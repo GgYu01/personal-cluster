@@ -51,3 +51,9 @@ variable "gitops_repo_url" {
   description = "The URL of the Git repository for ArgoCD"
   type        = string
 }
+
+variable "manage_dns_record" {
+  description = "If set to true, Terraform will manage the wildcard DNS A record in Cloudflare. Set to false to skip DNS management if the record already exists or is managed externally."
+  type        = bool
+  default     = false # 默认关闭DNS管理，以避免因记录已存在而报错
+}

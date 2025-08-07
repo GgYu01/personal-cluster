@@ -8,15 +8,16 @@ data "cloudflare_zones" "selected" {
 }
 
 # --- Resource: Create DNS Record ---
-# Use the 'cloudflare_dns_record' resource, which is the correct name.
 resource "cloudflare_dns_record" "cluster_wildcard" {
+  # CRITICAL CHANGE: This resource is now conditional.
+  # It will only be created if a Cloudflare zone is found AND var.manage_dns_record is true.
+  # The '&&' operator ensures both conditions must be met.
+  count = length(data.cloudflare_zones.selected.result) > 0 && var.manage_dns_record ? 1 : 0
+
   # The zone_id is retrieved from the 'id' of the first element in the
   # 'result' list returned by the data source.
   # The 'try' function handles the case where no zones are found, preventing an error.
   zone_id = try(data.cloudflare_zones.selected.result[0].id, null)
-
-  # Ensure this resource is only created if a zone was actually found.
-  count = length(data.cloudflare_zones.selected.result) > 0 ? 1 : 0
 
   # The name of the DNS record, derived from local variables.
   name = "*.${local.cluster_base_subdomain}"
