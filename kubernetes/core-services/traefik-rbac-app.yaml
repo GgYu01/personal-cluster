@@ -1,0 +1,23 @@
+# kubernetes/core-services/traefik-rbac-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: traefik-rbac
+  namespace: argocd
+  annotations:
+    # 确保它在 Traefik 应用之前或同时部署
+    argocd.argoproj.io/sync-wave: "-1" 
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/GgYu01/personal-cluster.git
+    targetRevision: HEAD
+    # 指向包含我们新创建的 RBAC 文件的目录
+    path: kubernetes/rbac/traefik
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default # RBAC 对象是集群范围的，namespace 在这里不重要
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

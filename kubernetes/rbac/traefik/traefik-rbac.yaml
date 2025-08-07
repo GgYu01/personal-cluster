@@ -1,0 +1,22 @@
+# kubernetes/core-services/traefik-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: traefik-secret-reader
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: traefik-secret-reader-binding
+subjects:
+- kind: ServiceAccount
+  name: traefik # Traefik Helm chart 创建的 ServiceAccount 的默认名称
+  namespace: traefik
+roleRef:
+  kind: ClusterRole
+  name: traefik-secret-reader
+  apiGroup: rbac.authorization.k8s.io
