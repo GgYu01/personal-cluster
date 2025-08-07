@@ -1,4 +1,4 @@
-# kubernetes/core-services/cert-manager.yaml (Definitive Final Version)
+# kubernetes/core-services/cert-manager.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -16,8 +16,6 @@ spec:
       releaseName: cert-manager
       values: |
         installCRDs: true
-        # 不需要任何特殊的 extraArgs 或 shim 配置
-        # ingress-shim 默认会处理标准的 Ingress 资源
         prometheus:
           enabled: false
   destination:

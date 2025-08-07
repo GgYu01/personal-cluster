@@ -1,0 +1,25 @@
+# kubernetes/manifests/argocd-ingress/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-ingress
+  namespace: argocd
+  annotations:
+    cert-manager.io/cluster-issuer: cloudflare
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: "argocd.core01.prod.gglohh.top"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argocd-server
+            port:
+              name: https
+  tls:
+  - hosts:
+    - "argocd.core01.prod.gglohh.top"
+    secretName: argocd-server-tls

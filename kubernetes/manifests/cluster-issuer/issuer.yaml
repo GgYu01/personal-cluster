@@ -1,0 +1,18 @@
+# kubernetes/manifests/cluster-issuer/issuer.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: cloudflare
+spec:
+  acme:
+    email: 1405630484@qq.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-private-key
+    solvers:
+    - dns01:
+        cloudflare:
+          email: 1405630484@qq.com
+          apiTokenSecretRef:
+            name: cloudflare-api-token-secret
+            key: api-token
