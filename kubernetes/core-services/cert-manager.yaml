@@ -1,4 +1,4 @@
-# kubernetes/core-services/cert-manager.yaml (Definitive Final Version)
+# kubernetes/core-services/cert-manager.yaml (Definitive Final Version v5)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -15,31 +15,32 @@ spec:
     helm:
       releaseName: cert-manager
       values: |
-        # Install the CRDs as part of this release
         installCRDs: true
         
-        # Set log level for debugging purposes
         global:
           logLevel: 2 
         
-        # We are not using Prometheus for now
         prometheus:
           enabled: false
 
         # --- START: CRITICAL FIX FOR TRAEFIK & INGRESSROUTE INTEGRATION ---
-        # This is the correct way to pass extra arguments to the cert-manager controller pod.
-        # We are telling the ingress-shim controller within cert-manager to specifically
-        # look for Ingress-like objects that have the 'ingressClassName: traefik' or
-        # are associated with the Traefik controller. This is the key to enable
-        # processing of IngressRoute resources.
+
+        # 1. Enable the feature gate for Gateway API support in the controller.
         extraArgs:
           - --feature-gates=ExperimentalGatewayAPISupport=true
         
-        # The 'ingress-shim' configuration is still relevant.
+        # 2. CRITICAL: Explicitly enable the 'gateway-shim' controller itself.
+        # This controller is disabled by default and is required to process Gateway API
+        # resources, which includes Traefik's IngressRoutes.
+        gateway-shim:
+          enabled: true
+
+        # The 'ingress-shim' can remain configured for default behavior.
         ingressShim:
           defaultIssuerName: cloudflare
           defaultIssuerKind: ClusterIssuer
           defaultIssuerGroup: cert-manager.io
+          
         # --- END: CRITICAL FIX FOR TRAEFIK & INGRESSROUTE INTEGRATION ---
 
   destination:
