@@ -14,9 +14,11 @@ metadata:
   name: traefik-secret-reader-binding
 subjects:
 - kind: ServiceAccount
-  name: traefik # K3s内置Traefik的SA
-  namespace: kube-system
+  # CORRECTED: Point to the ServiceAccount in our 'traefik' namespace
+  name: traefik
+  namespace: traefik
 roleRef:
   kind: ClusterRole
   name: traefik-secret-reader
-  apiGroup: rbac.authorization.s.io
+  # CORRECTED: The correct API group
+  apiGroup: rbac.authorization.k8s.io
