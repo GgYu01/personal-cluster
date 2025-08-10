@@ -52,7 +52,6 @@ resource "terraform_data" "k3s_install" {
       "echo '==> [TF-K3S-INSTALL] Installing K3s with explicit DNS configuration...'",
       join(" \\\n  ", [
         "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${var.k3s_version}' sh -s - server",
-        "--disable traefik",
         "--tls-san ${local.api_server_fqdn}",
         "--tls-san ${var.vps_ip}",
         "--datastore-endpoint=http://127.0.0.1:2379",

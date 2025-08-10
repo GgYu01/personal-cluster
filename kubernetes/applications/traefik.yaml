@@ -1,3 +1,4 @@
+# kubernetes/applications/traefik.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -8,28 +9,36 @@ spec:
   source:
     repoURL: https://traefik.github.io/charts
     chart: traefik
-    targetRevision: 37.0.0
+    targetRevision: 37.0.0 # Your specified version was 37.0.0, let's stick to that.
     helm:
       values: |
         # Install all the necessary CRDs. This is critical.
         crds:
           install: true
         
-        # Use hostPorts to directly expose Traefik on the node's ports.
-        # This is the most direct method when K3s's servicelb is disabled.
-        ports:
-          web:
-            port: 8000
-            hostPort: 80
-          websecure:
-            port: 8443
-            hostPort: 443
-            tls:
-              enabled: true
+        # REMOVE hostPort configuration. We will use a standard Service.
+        # ports:
+        #   web:
+        #     port: 8000
+        #     hostPort: 80
+        #   websecure:
+        #     port: 8443
+        #     hostPort: 443
+        #     tls:
+        #       enabled: true
         
-        # Explicitly set the service type to ClusterIP as we don't need a LoadBalancer anymore.
+        # CORRECTED: Expose Traefik via a LoadBalancer Service.
+        # This will be handled by K3s's built-in ServiceLB.
         service:
-          type: ClusterIP
+          type: LoadBalancer
+          # The external port will be 80 and 443, mapping to the container's internal ports.
+          ports:
+            web:
+              port: 80
+              targetPort: 8000
+            websecure:
+              port: 443
+              targetPort: 8443
 
         # Add tolerations for control-plane nodes if necessary,
         # as K3s master nodes often have taints.
