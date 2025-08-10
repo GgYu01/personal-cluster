@@ -35,8 +35,8 @@ resource "terraform_data" "k3s_install" {
   triggers_replace = {
     k3s_version   = var.k3s_version
     cluster_token = var.k3s_cluster_token
-+   # DEFINITIVE FIX: Add a timestamp to force re-provisioning on every run.
-+   rerun_on_apply = timestamp()
+   # DEFINITIVE FIX: Add a timestamp to force re-provisioning on every run.
+   rerun_on_apply = timestamp()
   }
 
   connection {
