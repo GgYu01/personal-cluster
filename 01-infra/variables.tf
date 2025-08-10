@@ -40,10 +40,11 @@ variable "environment" {
 }
 
 # -- K3s 版本输入 --
+# Using the version confirmed by the user to be the latest stable release.
 variable "k3s_version" {
   description = "The specific version of K3s to install."
   type        = string
-  default     = "v1.33.3+k3s1" # Pinning to a specific stable version
+  default     = "v1.33.3+k3s1" # Using user-confirmed version.
 }
 
 # -- GitOps 输入 --
@@ -56,4 +57,11 @@ variable "manage_dns_record" {
   description = "If set to true, Terraform will manage the wildcard DNS A record in Cloudflare. Set to false to skip DNS management if the record already exists or is managed externally."
   type        = bool
   default     = false # 默认关闭DNS管理，以避免因记录已存在而报错
+}
+
+variable "k3s_cluster_token" {
+  description = "A shared secret for K3s servers to join the same cluster with an external datastore."
+  type        = string
+  sensitive   = true
+  default     = "K3S_CLUSTER_SECRET_TOKEN_CHANGE_ME_IN_PRODUCTION" # For non-prod, a simple static token is fine.
 }

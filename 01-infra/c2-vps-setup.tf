@@ -22,6 +22,10 @@ resource "terraform_data" "vps_setup" {
   # Trigger re-provisioning if the compose file content changes.
   triggers_replace = {
     compose_file_sha1 = sha1(local_file.etcd_docker_compose.content)
+   # DEFINITIVE FIX: Add a timestamp to force re-provisioning on every run.
+   # This ensures that if the remote state was cleaned up by the script,
+   # Terraform will always re-apply the setup steps.
+   rerun_on_apply = timestamp()
   }
 
   connection {
@@ -34,12 +38,11 @@ resource "terraform_data" "vps_setup" {
   # Provisioner Step 1: Clean up previous installation for idempotency.
   provisioner "remote-exec" {
     inline = [
-      "echo '==> [ETCD-CLEANUP] Ensuring /opt/etcd directory exists...'",
+      "echo '==> [TF-ETCD-CLEANUP] Ensuring /opt/etcd directory exists...'",
       "mkdir -p /opt/etcd",
-      "echo '==> [ETCD-CLEANUP] Stopping and removing any existing etcd container...'",
-      # The '|| true' idiom prevents script failure if compose file or container doesn't exist.
-      "if [ -f /opt/etcd/docker-compose.yml ]; then cd /opt/etcd && docker-compose down --remove-orphans; fi || true",
-      "echo '==> [ETCD-CLEANUP] Purging old etcd data...'",
+      "echo '==> [TF-ETCD-CLEANUP] Stopping and removing any existing etcd container...'",
+      "if [ -f /opt/etcd/docker-compose.yml ]; then (cd /opt/etcd && docker-compose down --remove-orphans); fi || true",
+      "echo '==> [TF-ETCD-CLEANUP] Purging old etcd data...'",
       "rm -rf /opt/etcd/data"
     ]
   }
@@ -47,9 +50,9 @@ resource "terraform_data" "vps_setup" {
   # Provisioner Step 2: Create directory and set permissions.
   provisioner "remote-exec" {
     inline = [
-      "echo '==> [ETCD-SETUP] Creating data directory...'",
+      "echo '==> [TF-ETCD-SETUP] Creating data directory...'",
       "mkdir -p /opt/etcd/data",
-      "echo '==> [ETCD-SETUP] Setting ownership for Bitnami non-root user (1001)...'",
+      "echo '==> [TF-ETCD-SETUP] Setting ownership for Bitnami non-root user (1001)...'",
       "chown -R 1001:1001 /opt/etcd/data"
     ]
   }
@@ -62,7 +65,7 @@ resource "terraform_data" "vps_setup" {
 
   provisioner "remote-exec" {
     inline = [
-      "echo '==> [ETCD-DEPLOY] Starting etcd service via docker-compose...'",
+      "echo '==> [TF-ETCD-DEPLOY] Starting etcd service via docker-compose...'",
       "cd /opt/etcd && docker-compose up -d"
     ]
   }
