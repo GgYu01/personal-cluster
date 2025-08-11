@@ -1,22 +1,31 @@
-# bootstrap/c1-dns.tf
+# 01-infra/c1-dns.tf
 
-# --- Data Source: Get Zone ID ---
-# CORRECTED SYNTAX for cloudflare provider v5.x
-# The 'filter' block is removed, and the filter attribute ('name') is at the top level.
-data "cloudflare_zones" "selected" {
-  name = var.domain_name
+# --- Data Source: Query for existing wildcard DNS record ---
+# This is used by the deployment script to check if the record already exists.
+# We use 'cloudflare_records' (plural) as it supports filtering by name and type.
+data "cloudflare_records" "wildcard_check" {
+  zone_id = data.cloudflare_zones.selected.zones[0].id
+  filter {
+    name = "*.${local.cluster_base_subdomain}"
+    type = "A"
+  }
 }
 
-# --- Resource: Create DNS Record ---
-# This resource is managed externally by the deployment script.
-# Terraform is only called to apply this target if the script deems it necessary.
+# --- Resource: Create wildcard DNS record ---
+# This resource is ONLY targeted by the deployment script if the data source above returns no results.
 resource "cloudflare_dns_record" "cluster_wildcard" {
-  # The zone_id is now retrieved from the 'result' attribute of the data source.
-  zone_id = try(data.cloudflare_zones.selected.result[0].id, null)
+  zone_id = data.cloudflare_zones.selected.zones[0].id
   name    = "*.${local.cluster_base_subdomain}"
-  content = var.vps_ip
+  value   = var.vps_ip # 'value' is the correct argument name, not 'content'
   type    = "A"
   ttl     = 300
   proxied = false
   comment = "Terraform-managed wildcard for personal cluster"
+}
+
+# --- Data Source: Get Zone Info (Unchanged but critical) ---
+data "cloudflare_zones" "selected" {
+  filter {
+    name = var.domain_name
+  }
 }

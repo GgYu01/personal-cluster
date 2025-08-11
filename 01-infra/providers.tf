@@ -13,6 +13,10 @@ terraform {
       source  = "tenstad/remote"
       version = "0.2.1"
     }
+    shell = {
+      source  = "scott-the-dev/shell"
+      version = "1.7.10"
+    }
   }
 }
 

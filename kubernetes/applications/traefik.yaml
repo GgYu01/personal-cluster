@@ -4,44 +4,35 @@ kind: Application
 metadata:
   name: traefik
   namespace: argocd
+  # Add sync-wave to ensure it deploys after cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
 spec:
   project: default
   source:
     repoURL: https://traefik.github.io/charts
     chart: traefik
-    targetRevision: 37.0.0 # Your specified version was 37.0.0, let's stick to that.
+    targetRevision: 37.0.0
     helm:
       values: |
-        # Install all the necessary CRDs. This is critical.
         crds:
           install: true
         
-        # REMOVE hostPort configuration. We will use a standard Service.
-        # ports:
-        #   web:
-        #     port: 8000
-        #     hostPort: 80
-        #   websecure:
-        #     port: 8443
-        #     hostPort: 443
-        #     tls:
-        #       enabled: true
+        ports:
+          web:
+            port: 8000
+            hostPort: 80
+            protocol: TCP
+          websecure:
+            port: 8443
+            hostPort: 443
+            protocol: TCP
+            tls:
+              enabled: true
         
-        # CORRECTED: Expose Traefik via a LoadBalancer Service.
-        # This will be handled by K3s's built-in ServiceLB.
         service:
-          type: LoadBalancer
-          # The external port will be 80 and 443, mapping to the container's internal ports.
-          ports:
-            web:
-              port: 80
-              targetPort: 8000
-            websecure:
-              port: 443
-              targetPort: 8443
+          type: ClusterIP
 
-        # Add tolerations for control-plane nodes if necessary,
-        # as K3s master nodes often have taints.
         tolerations:
           - key: "CriticalAddonsOnly"
             operator: "Exists"

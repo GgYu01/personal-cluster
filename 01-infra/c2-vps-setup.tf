@@ -19,13 +19,14 @@ resource "local_file" "etcd_docker_compose" {
 
 # Use terraform_data as the modern replacement for null_resource.
 resource "terraform_data" "vps_setup" {
+
   # Trigger re-provisioning if the compose file content changes.
   triggers_replace = {
     compose_file_sha1 = sha1(local_file.etcd_docker_compose.content)
-   # DEFINITIVE FIX: Add a timestamp to force re-provisioning on every run.
-   # This ensures that if the remote state was cleaned up by the script,
-   # Terraform will always re-apply the setup steps.
-   rerun_on_apply = timestamp()
+    # DEFINITIVE FIX: Add a timestamp to force re-provisioning on every run.
+    # This ensures that if the remote state was cleaned up by the script,
+    # Terraform will always re-apply the setup steps.
+    rerun_on_apply = timestamp()
   }
 
   connection {
