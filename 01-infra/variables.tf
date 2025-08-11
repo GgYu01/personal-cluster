@@ -1,4 +1,4 @@
-# bootstrap/variables.tf
+# 01-infra/variables.tf
 
 # -- 基础架构输入 --
 variable "vps_ip" {
@@ -17,16 +17,12 @@ variable "ssh_user" {
 }
 
 variable "ssh_private_key_path" {
-  description = "Path to the SSH private key for VPS access. The ~ will be expanded."
+  description = "Path to the SSH private key for VPS access."
   type        = string
-  default     = "~/.ssh/id_rsa" # 用户仍然可以输入~，但我们会在使用时处理它
+  default     = "~/.ssh/id_rsa"
 }
 
-variable "cf_api_token" {
-  description = "Cloudflare API Token"
-  type        = string
-  sensitive   = true # 尽管硬编码，标记为sensitive可以在UI输出中隐藏
-}
+# The 'cf_api_token' variable has been removed.
 
 # -- 逻辑集群与环境输入 --
 variable "site_code" {
@@ -40,11 +36,10 @@ variable "environment" {
 }
 
 # -- K3s 版本输入 --
-# Using the version confirmed by the user to be the latest stable release.
 variable "k3s_version" {
   description = "The specific version of K3s to install."
   type        = string
-  default     = "v1.33.3+k3s1" # Using user-confirmed version.
+  default     = "v1.33.3+k3s1"
 }
 
 # -- GitOps 输入 --
@@ -53,15 +48,11 @@ variable "gitops_repo_url" {
   type        = string
 }
 
-variable "manage_dns_record" {
-  description = "If set to true, Terraform will manage the wildcard DNS A record in Cloudflare. Set to false to skip DNS management if the record already exists or is managed externally."
-  type        = bool
-  default     = false # 默认关闭DNS管理，以避免因记录已存在而报错
-}
+# The 'manage_dns_record' variable has been removed.
 
 variable "k3s_cluster_token" {
-  description = "A shared secret for K3s servers to join the same cluster with an external datastore."
+  description = "A shared secret for K3s servers to join the same cluster."
   type        = string
   sensitive   = true
-  default     = "K3S_CLUSTER_SECRET_TOKEN_CHANGE_ME_IN_PRODUCTION" # For non-prod, a simple static token is fine.
+  default     = "admin" # Using the simple token as requested
 }

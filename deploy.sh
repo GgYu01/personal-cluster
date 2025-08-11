@@ -1,38 +1,28 @@
 #!/bin/bash
 
 # ==============================================================================
-#      Personal Cluster Granular & Unattended Deployment Tool (Final Version)
+#      The Final Orchestrator (v9.0 - The Last Stand)
 # ==============================================================================
-# This script executes a fine-grained, step-by-step deployment.
-# It is strictly non-interactive and exits immediately on any error.
 #
-# USAGE:
-#   ./deploy.sh [function_name]
+# v9.0 Philosophy:
+# - THE REAL ROOT CAUSE: The K3s installation is now fixed to disable BOTH
+#   conflicting default addons: `traefik` AND `servicelb`. The `servicelb`
+#   component was the hidden culprit preventing our own Traefik from binding
+#   to host ports.
+# - ULTIMATE DEBUGGING: The debug dump now includes detailed `describe` and
+#   `logs` output for the Traefik pod, which will reveal the exact reason
+#   for any future failure.
 #
-#   - If no [function_name] is provided, it runs ALL steps sequentially.
-#   - If a [function_name] (e.g., 'apply_dns') is provided, it runs only that step.
 # ==============================================================================
 
-# --- Strict Error Handling ---
+# --- Strict Mode & Initial Setup ---
 set -e
 set -o pipefail
+LOG_FILE="deployment_v9.0_$(date +%Y%m%d_%H%M%S).log"
+exec &> >(tee -a "${LOG_FILE}")
+echo "### DEPLOYMENT ORCHESTRATOR (v9.0) INITIATED AT $(date) ###"
 
-# --- ANSI Color Codes ---
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-# --- Helper Function ---
-function print_header() {
-    echo -e "\n${BLUE}>>>${NC} ${CYAN}$1${NC}"
-}
-
-# ==============================================================================
-#                          !!! USER CONFIGURATION !!!
-# ==============================================================================
+# --- Configuration ---
 export TF_VAR_domain_name="gglohh.top"
 export TF_VAR_site_code="core01"
 export TF_VAR_environment="prod"
@@ -40,241 +30,124 @@ export TF_VAR_vps_ip="172.245.187.113"
 export TF_VAR_ssh_user="root"
 export TF_VAR_ssh_private_key_path="~/.ssh/id_rsa"
 export TF_VAR_gitops_repo_url="https://github.com/GgYu01/personal-cluster.git"
-export TF_VAR_cf_api_token="vi7hkPq4FwD5ttV4dvR_IoNVEJSphydRPcT0LVD-"
-# ==============================================================================
+export TF_VAR_k3s_version="v1.33.3+k3s1"
+export TF_VAR_k3s_cluster_token="admin"
 
-# ------------------------------------------------------------------------------
-#                        STAGE 1: INFRASTRUCTURE (01-infra)
-# ------------------------------------------------------------------------------
+ARGOCD_NS="argocd"
+ARGOCD_CHART_VERSION="7.3.6"
+ADMIN_USERNAME="admin"
 
-function init_infra() {
-    print_header "1.1: Initializing Infrastructure Workspace (01-infra)"
-    cd 01-infra
-    terraform init -upgrade
-    terraform validate
-    cd ..
+# --- Calculated Variables ---
+WILDCARD_NAME="*.${TF_VAR_site_code}.${TF_VAR_environment}"
+API_SERVER_FQDN="api.${TF_VAR_site_code}.${TF_VAR_environment}.${TF_VAR_domain_name}"
+ARGOCD_FQDN="argocd.${TF_VAR_site_code}.${TF_VAR_environment}.${TF_VAR_domain_name}"
+SSH_KEY_PATH_EXPANDED="${TF_VAR_ssh_private_key_path/#\~/$HOME}"
+SSH_CMD="ssh -i ${SSH_KEY_PATH_EXPANDED} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+
+# --- Helper Functions ---
+log_step() {
+    echo -e "\n\n\033[1;34m# ============================================================================== #\033[0m"
+    echo -e "\033[1;34m# STEP $1: $2 \033[0m"
+    echo -e "\033[1;34m# ============================================================================== #\033[0m\n"
 }
 
-function apply_dns() {
-    print_header "1.2: Applying DNS Record"
-    cd 01-infra
-    terraform apply -target="cloudflare_dns_record.cluster_wildcard[0]" -auto-approve
-    cd ..
-}
-
-function verify_dns() {
-    print_header "1.3: Verifying DNS Record"
-    echo "Waiting 10 seconds for DNS propagation..."
-    sleep 10
-    local test_domain="test.${TF_VAR_site_code}.${TF_VAR_environment}.${TF_VAR_domain_name}"
-    echo "Querying A record for '${test_domain}' via 1.1.1.1..."
-    local result
-    result=$(dig @1.1.1.1 "${test_domain}" +short)
-    echo "Result: ${result}"
-    if [[ "$result" != "$TF_VAR_vps_ip" ]]; then
-        echo -e "${RED}DNS Verification FAILED. Expected '${TF_VAR_vps_ip}', got '${result}'.${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}DNS Verification PASSED.${NC}"
-}
-
-function apply_etcd() {
-    print_header "1.4: Applying etcd Setup on VPS"
-    cd 01-infra
-    terraform apply -target=terraform_data.vps_setup -auto-approve
-    cd ..
-}
-
-function verify_etcd() {
-    print_header "1.5: Verifying etcd Container"
-    local ssh_key_path
-    ssh_key_path=$(eval echo "$TF_VAR_ssh_private_key_path")
-    echo "Checking for running 'core-etcd' container..."
-    if ! ssh -i "$ssh_key_path" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${TF_VAR_ssh_user}@${TF_VAR_vps_ip}" "docker ps | grep -q 'core-etcd'"; then
-        echo -e "${RED}etcd container 'core-etcd' is not running on remote host.${NC}"
-        ssh -i "$ssh_key_path" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${TF_VAR_ssh_user}@${TF_VAR_vps_ip}" "docker ps" # Show what is running
-        exit 1
-    fi
-    echo -e "${GREEN}etcd container is running.${NC}"
-}
-
-function apply_k3s() {
-    print_header "1.6: Applying K3s Installation"
-    cd 01-infra
-    terraform apply -target=terraform_data.k3s_install -auto-approve
-    cd ..
-}
-
-function verify_k3s_outputs() {
-    print_header "1.7: Verifying K3s Installation & Outputs"
-    cd 01-infra
-    echo "Refreshing state to fetch outputs..."
-    terraform refresh
-    echo "Checking for non-empty cluster_host output..."
-    if [[ -z "$(terraform output -raw cluster_host)" ]]; then
-        echo -e "${RED}K3s verification FAILED: 'cluster_host' output is empty.${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}K3s outputs are available.${NC}"
-    cd ..
-}
-
-# ------------------------------------------------------------------------------
-#                          STAGE 2: APPLICATIONS (02-apps)
-# ------------------------------------------------------------------------------
-
-function init_apps() {
-    print_header "2.1: Initializing Applications Workspace (02-apps)"
-    if [ ! -f "01-infra/terraform.tfstate" ]; then
-        echo -e "${RED}ERROR: '01-infra/terraform.tfstate' not found. Stage 1 must be completed first.${NC}"
-        exit 1
-    fi
-    cd 02-apps
-    terraform init -upgrade
-    terraform validate
-    cd ..
-}
-
-function apply_argocd_helm() {
-    print_header "2.2: Applying ArgoCD Helm Release"
-    cd 02-apps
-    local cluster_base_domain
-    cluster_base_domain=$(cd ../01-infra && terraform output -raw cluster_base_domain)
-    terraform apply -target=helm_release.argocd -var="cluster_base_domain=${cluster_base_domain}" -auto-approve
-    cd ..
-}
-
-function verify_argocd_crds() {
-    print_header "2.3: Verifying ArgoCD CRDs are registered"
-    echo "Generating temporary kubeconfig for verification..."
-    cd 01-infra
-    terraform output -raw kubeconfig_content > ../k3s-debug.yaml
-    cd ..
-    export KUBECONFIG="$(pwd)/k3s-debug.yaml"
-
-    echo "Waiting for 'applications.argoproj.io' CRD to be available (up to 90s)..."
-    local end_time=$((SECONDS+90))
-    while ! kubectl get crd applications.argoproj.io > /dev/null 2>&1; do
-        if [ $SECONDS -gt $end_time ]; then
-            echo -e "${RED}Verification FAILED: Timed out waiting for ArgoCD CRDs.${NC}"
-            kubectl get crds
-            rm -f "$KUBECONFIG"
-            unset KUBECONFIG
-            exit 1
-        fi
-        sleep 5
-    done
+dump_debug_info() {
+    echo -e "\n\033[1;31m--- START OF ULTIMATE DEBUG INFORMATION ---\033[0m"
     
-    echo -e "${GREEN}ArgoCD CRD 'applications.argoproj.io' is registered.${NC}"
-    rm -f "$KUBECONFIG"
-    unset KUBECONFIG
+    echo -e "\n\033[1;33m[DEBUG] All ArgoCD Applications:\033[0m"
+    kubectl get applications -A -o wide || echo "[DEBUG] Could not list applications."
+
+    echo -e "\n\033[1;33m[DEBUG] Traefik Pod Description:\033[0m"
+    kubectl describe pod -n traefik -l app.kubernetes.io/name=traefik || echo "[DEBUG] Could not describe Traefik pod."
+
+    echo -e "\n\033[1;33m[DEBUG] Traefik Pod Logs:\033[0m"
+    kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=100 || echo "[DEBUG] Could not get Traefik pod logs."
+
+    echo -e "\n\033[1;33m[DEBUG] All Pods in All Namespaces:\033[0m"
+    kubectl get pods -A -o wide || echo "[DEBUG] Could not list pods."
+
+    echo -e "\n\033[1;33m[DEBUG] All Events in 'traefik' namespace (last 10):\033[0m"
+    kubectl get events -n traefik --sort-by='.lastTimestamp' | tail -n 10 || echo "[DEBUG] Could not get events from traefik namespace."
+    
+    echo -e "\n\033[1;31m--- END OF ULTIMATE DEBUG INFORMATION ---\033[0m"
 }
 
-function apply_argocd_root_app() {
-    print_header "2.4: Applying ArgoCD Root Application"
-    cd 02-apps
-    local cluster_base_domain
-    cluster_base_domain=$(cd ../01-infra && terraform output -raw cluster_base_domain)
-    terraform apply -target=kubernetes_manifest.app_of_apps -var="cluster_base_domain=${cluster_base_domain}" -auto-approve
-    cd ..
-}
-
-function verify_deployment_complete() {
-    print_header "2.5: Final Verification (Enhanced for Complex Deployments)"
-    echo "Generating temporary kubeconfig for final check..."
-    cd 01-infra
-    terraform output -raw kubeconfig_content > ../k3s-debug.yaml
-    cd ..
-    export KUBECONFIG="$(pwd)/k3s-debug.yaml"
-
-    # --- STAGE 1: Verify Critical Infrastructure (Longhorn StorageClass) ---
-    echo "Waiting for 'longhorn' StorageClass to become available (up to 180s)..."
-    local end_time=$((SECONDS+180))
-    while ! kubectl get sc longhorn > /dev/null 2>&1; do
-        if [ $SECONDS -gt $end_time ]; then
-            echo -e "${RED}Verification FAILED: Timed out waiting for 'longhorn' StorageClass.${NC}"
-            echo "Current StorageClasses:"
-            kubectl get sc
-            rm -f "$KUBECONFIG"
-            unset KUBECONFIG
+wait_for_command() {
+    local cmd_to_run=$1
+    local description=$2
+    local timeout_seconds=$3
+    local start_time=$(date +%s)
+    echo "--> WAITING for: ${description} (timeout: ${timeout_seconds}s)..."
+    until eval "${cmd_to_run}" &> /dev/null; do
+        if (( $(date +%s) - start_time > timeout_seconds )); then
+            echo -e "\n\033[0;31mFATAL: Timed out waiting for '${description}'.\033[0m" >&2
+            echo "--- Last command output for debugging ---"
+            eval "${cmd_to_run}"
+            echo "---------------------------------------"
+            dump_debug_info
             exit 1
         fi
-        echo "  'longhorn' StorageClass not found, retrying in 10 seconds..."
+        echo -n "."
         sleep 10
     done
-    echo -e "${GREEN}'longhorn' StorageClass is available.${NC}"
-
-    # --- STAGE 2: Wait for all pods across key namespaces with a generous timeout ---
-    # We now wait for a much longer period (10 minutes) because applications
-    # like Minio and Casdoor depend on Longhorn and may take time to pull images and initialize.
-    local total_timeout="600s"
-    echo "Checking all pods status in argocd, traefik, longhorn-system, minio, casdoor namespaces (waiting up to ${total_timeout})..."
-    
-    # Wait for all deployments to be fully rolled out and available.
-    # This is often more reliable than waiting for individual pods.
-    if ! kubectl wait --for=condition=Available deployment --all --all-namespaces --timeout=${total_timeout}; then
-        echo -e "${RED}Final verification FAILED: Not all Deployments are available after ${total_timeout}.${NC}"
-        echo "Describing problematic pods..."
-        # Find pods that are not ready and describe them for easier debugging
-        kubectl get pods --all-namespaces --field-selector=status.phase!=Running | grep -v "Completed" | awk 'NR>1 {print "-n "$1" "$2}' | xargs -L1 kubectl describe pod
-        rm -f "$KUBECONFIG"
-        unset KUBECONFIG
-        exit 1
-    fi
-
-    echo -e "${GREEN}All Deployments are available.${NC}"
-
-    # --- STAGE 3: Final Status Snapshot ---
-    echo "Final cluster node status:"
-    kubectl get nodes -o wide
-
-    echo "Final pods status in key namespaces:"
-    kubectl get pods -n argocd
-    kubectl get pods -n traefik
-    kubectl get pods -n longhorn-system
-    
-    rm -f "$KUBECONFIG"
-    unset KUBECONFIG
+    echo -e "\n--> \033[0;32mSUCCESS:\033[0m '${description}' is ready."
 }
 
-# --- Main Execution Logic ---
-
-# List of all functions to be called in order for a full deployment
-ALL_STEPS=(
-    init_infra
-    # apply_dns
-    # verify_dns
-    apply_etcd
-    verify_etcd
-    apply_k3s
-    verify_k3s_outputs
-    init_apps
-    apply_argocd_helm
-    verify_argocd_crds
-    apply_argocd_root_app
-    verify_deployment_complete
-)
-
-# If a command-line argument is provided, try to run it as a function
-if [ -n "$1" ]; then
-    # Check if the provided argument is a valid function name in this script
-    if declare -f "$1" > /dev/null; then
-        # Call the function
-        "$1"
-        exit 0
-    else
-        echo -e "${RED}Error: Function '$1' not found.${NC}"
-        echo "Available functions are:"
-        # List all functions defined in the script
-        declare -F | awk '{print $3}' | grep -v -E "^(print_header|main)$"
-        exit 1
+# --- Deployment Steps ---
+function main() {
+    log_step "1" "Verifying Manual DNS Prerequisite"
+    local FQDN_TO_TEST="check-$(date +%s).${TF_VAR_site_code}.${TF_VAR_environment}.${TF_VAR_domain_name}"
+    local RESOLVED_IP=$(dig @1.1.1.1 "${FQDN_TO_TEST}" +short +time=5)
+    if [[ "${RESOLVED_IP}" != "${TF_VAR_vps_ip}" ]]; then
+        echo "FATAL: DNS Prerequisite Not Met!" && exit 1
     fi
-fi
+    echo "--> SUCCESS: DNS prerequisite is met."
 
-# Default behavior: run all steps sequentially
-print_header "🚀 STARTING FULL DEPLOYMENT 🚀"
-for step in "${ALL_STEPS[@]}"; do
-    # This calls each function name listed in the ALL_STEPS array
-    "$step"
-done
-print_header "✅ DEPLOYMENT COMPLETE ✅"
+    log_step "2" "Preparing Environment"
+    rm -rf 01-infra/.terraform* 01-infra/terraform.tfstate* ~/.kube/config
+    ${SSH_CMD} "${TF_VAR_ssh_user}@${TF_VAR_vps_ip}" 'if [ -f /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; fi; if [ -f /opt/etcd/docker-compose.yml ]; then (cd /opt/etcd && docker-compose down -v); fi; rm -rf /etc/rancher /var/lib/rancher /opt/etcd'
+
+    log_step "3" "Applying Core Infrastructure (etcd & K3s)"
+    cd 01-infra
+    terraform init -upgrade >/dev/null
+    terraform apply -auto-approve
+    cd ..
+
+    log_step "4" "Verifying Cluster Health and Setting up Kubeconfig"
+    KUBECONFIG_PATH=~/.kube/config
+    RAW_KUBECONFIG=$(${SSH_CMD} "${TF_VAR_ssh_user}@${TF_VAR_vps_ip}" "cat /etc/rancher/k3s/k3s.yaml")
+    PROCESSED_KUBECONFIG=$(echo "${RAW_KUBECONFIG}" | sed "s/127.0.0.1/${API_SERVER_FQDN}/")
+    mkdir -p ~/.kube && echo "${PROCESSED_KUBECONFIG}" > "${KUBECONFIG_PATH}" && chmod 600 "${KUBECONFIG_PATH}"
+    export KUBECONFIG="${KUBECONFIG_PATH}"
+    wait_for_command "kubectl get nodes --no-headers | grep -q ' Ready'" "K3s node readiness" 300
+    wait_for_command "kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=30s" "CoreDNS pods" 300
+    wait_for_command "kubectl wait --for=condition=Ready pod -l k8s-app=metrics-server -n kube-system --timeout=30s" "metrics-server" 300
+    echo "--> SUCCESS: Core cluster is healthy."
+    
+    log_step "5" "Bootstrapping GitOps with ArgoCD"
+    kubectl create namespace "${ARGOCD_NS}" --dry-run=client -o yaml | kubectl apply -f - || true
+    helm repo add argo https://argoproj.github.io/argo-helm &>/dev/null || true; helm repo update > /dev/null
+    helm install argocd argo/argo-cd --version "${ARGOCD_CHART_VERSION}" -n "${ARGOCD_NS}" --set server.service.type=ClusterIP --wait --timeout 15m
+    kubectl apply -f kubernetes/bootstrap/root.yaml
+
+    log_step "6" "Final End-to-End Verification"
+    echo "--> [6.1] Verifying Cert-Manager installation..."
+    wait_for_command "kubectl wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=300s" "Cert-Manager deployment to be Available" 300
+    echo "--> [6.2] Verifying Traefik installation..."
+    wait_for_command "kubectl wait --for=condition=Available deployment/traefik -n traefik --timeout=300s" "Traefik deployment to be Available" 300
+    echo "--> [6.3] Verifying Traefik is listening on host ports..."
+    wait_for_command "${SSH_CMD} '${TF_VAR_ssh_user}@${TF_VAR_vps_ip}' \"ss -tlpn | grep -E ':(80|443)' | grep 'traefik'\"" "Traefik to be listening on host ports 80/443" 180
+    echo "--> [6.4] Verifying Let's Encrypt Certificate and HTTPS access for ArgoCD..."
+    wait_for_command "kubectl get secret argocd-server-tls-staging -n argocd" "Let's Encrypt Certificate for ArgoCD" 600
+    wait_for_command "curl -s --fail -v https://${ARGOCD_FQDN} 2>&1 | grep -q 'issuer: C=US; O=(STAGING) Let'" "HTTPS access to ${ARGOCD_FQDN}" 180
+
+    echo -e "\n\n\033[1;32m##############################################################################\033[0m"
+    echo -e "\033[1;32m#               ✅ DEPLOYMENT COMPLETED SUCCESSFULLY ✅                       #\033[0m"
+    echo -e "\033[1;32m##############################################################################\033[0m"
+    echo -e "\nYour personal cluster is ready and GitOps is running."
+    echo -e "\n\033[1;33mACTION REQUIRED: Get your initial admin password\033[0m"
+    echo -e "Run: \033[1;36mkubectl -n ${ARGOCD_NS} get secret argocd-initial-admin-secret -o jsonpath=\"{.data.password}\" | base64 -d; echo\033[0m"
+    echo -e "\nAccess UI: \033[1;36mhttps://${ARGOCD_FQDN}\033[0m (Username: ${ADMIN_USERNAME})"
+}
+
+main

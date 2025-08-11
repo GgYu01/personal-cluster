@@ -1,4 +1,4 @@
-# kubernetes/bootstrap/root.yaml
+# kubernetes/bootstrap/root.yaml (v8.0 - CORRECTED PATH)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -9,9 +9,14 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/GgYu01/personal-cluster.git # 指向您自己
+    repoURL: https://github.com/GgYu01/personal-cluster.git
     targetRevision: HEAD
-    path: kubernetes/apps-of-apps # 指向下一级定义
+    # DEFINITIVE FIX: Point to the 'applications' directory which ACTUALLY
+    # contains the definitions for cert-manager, traefik, etc.
+    path: kubernetes/applications
+    # Enable directory recursion to find all YAML files within.
+    directory:
+      recurse: true
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

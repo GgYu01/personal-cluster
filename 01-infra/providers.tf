@@ -1,10 +1,7 @@
-# bootstrap/providers.tf
+# 01-infra/providers.tf
+
 terraform {
   required_providers {
-    cloudflare = {
-      source  = "cloudflare/cloudflare"
-      version = "5.8.2"
-    }
     local = {
       source  = "hashicorp/local"
       version = "2.5.3"
@@ -13,14 +10,7 @@ terraform {
       source  = "tenstad/remote"
       version = "0.2.1"
     }
-    shell = {
-      source  = "scott-the-dev/shell"
-      version = "1.7.10"
-    }
   }
 }
 
-provider "cloudflare" {
-  api_token = var.cf_api_token
-}
-
+# The 'cloudflare' provider block has been completely removed.
