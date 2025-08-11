@@ -1,4 +1,4 @@
-# kubernetes/applications/traefik.yaml (RECONSTRUCTED v2.0)
+# kubernetes/applications/traefik.yaml (FINAL & CORRECTED VERSION)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -14,20 +14,11 @@ spec:
     targetRevision: 37.0.0
     helm:
       releaseName: traefik
-      # LOGIC: Use valuesObject instead of a multi-line 'values' string.
-      # This eliminates any ambiguity from YAML formatting/indentation,
-      # passing a structured object directly to the Helm templating engine.
-      # This is the most robust way to provide complex values.
       valuesObject:
-        # LOGIC: These are all top-level keys in the official values.yaml,
-        # intended to be consumed by Kubernetes templating, not Traefik's binary.
-        # By placing them here, we ensure they modify the Deployment spec correctly.
         deployment:
           kind: Deployment
           replicas: 1
         
-        # LOGIC: Use the direct hostPort mapping. This remains the core strategy
-        # for exposing Traefik on a single-node cluster without a LoadBalancer.
         ports:
           web:
             port: 8000
@@ -38,14 +29,9 @@ spec:
             tls:
               enabled: true
               
-        # LOGIC: Explicitly set service type to ClusterIP to prevent the chart
-        # from attempting to create a LoadBalancer or NodePort service, which
-        # would conflict with hostPort.
         service:
           type: ClusterIP
           
-        # LOGIC: These are critical for scheduling the pod on a tainted
-        # single-node cluster. This structure is confirmed correct by the chart docs.
         tolerations:
         - key: "CriticalAddonsOnly"
           operator: "Exists"
@@ -56,11 +42,37 @@ spec:
           operator: "Exists"
           effect: "NoSchedule"
           
-        # LOGIC: Explicitly define providers. The CRD provider is essential
-        # for Traefik to read IngressRoute objects.
         providers:
           kubernetesCRD:
             enabled: true
+
+        # --- SECURITY CONTEXT FIX (THE FINAL PIECE) ---
+        # LOGIC: This is the definitive fix for the 'permission denied' error.
+        # The Traefik Helm chart defaults to running as a non-root user without special
+        # privileges. To bind to privileged host ports (< 1024), the process needs
+        # specific Linux capabilities.
+        securityContext:
+          # 1. We explicitly grant the 'NET_BIND_SERVICE' capability. This is the
+          #    most secure and standard way to allow a non-root process to bind
+          #    to privileged ports.
+          capabilities:
+            drop: [ALL]
+            add: [NET_BIND_SERVICE]
+          
+          # 2. We ensure the process does not run as root, maintaining a good
+          #    security posture where possible.
+          runAsNonRoot: true
+          runAsUser: 65532 # You can use the chart's default or any non-root UID
+          
+          # 3. We prevent the process from gaining more privileges.
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        
+        # LOGIC: Also apply a security context at the pod level.
+        podSecurityContext:
+          runAsGroup: 65532
+          runAsNonRoot: true
+          runAsUser: 65532
 
   destination:
     server: https://kubernetes.default.svc
