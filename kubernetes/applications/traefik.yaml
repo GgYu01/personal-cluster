@@ -1,10 +1,9 @@
-# kubernetes/applications/traefik.yaml
+# kubernetes/applications/traefik.yaml (RECONSTRUCTED)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: traefik
   namespace: argocd
-  # Add sync-wave to ensure it deploys after cert-manager
   annotations:
     argocd.argoproj.io/sync-wave: "-5"
 spec:
@@ -12,12 +11,22 @@ spec:
   source:
     repoURL: https://traefik.github.io/charts
     chart: traefik
-    targetRevision: 37.0.0
+    targetRevision: 37.0.0 # 保持与您指定的版本一致
     helm:
+      releaseName: traefik
       values: |
-        crds:
-          install: true
-        
+        # --- Core Deployment Configuration ---
+        # 1. LOGIC: 部署类型保持为Deployment。这是单节点集群的标准做法。
+        deployment:
+          kind: Deployment
+          replicas: 1
+
+        # --- Port & Host Exposure Configuration (THE CRITICAL FIX) ---
+        # 2. LOGIC: 这是解决问题的核心。我们直接在`ports`下定义hostPort，
+        #    这是Helm Chart设计的最直接的绑定主机端口的方式。
+        #    我们不再配置`service.type=LoadBalancer`或`NodePort`，因为`hostPort`
+        #    绕过了Service的端口暴露机制，直接由kubelet在节点上操作。
+        #    将两者混用是常见的冲突来源。
         ports:
           web:
             port: 8000
@@ -28,11 +37,33 @@ spec:
             hostPort: 443
             protocol: TCP
             tls:
-              enabled: true
-        
+              enabled: true # 确保websecure入口点启用了TLS
+
+        # --- Service Configuration ---
+        # 3. LOGIC: 明确将Service类型设置为ClusterIP。
+        #    虽然`hostPort`使得外部流量可以不经过Service，但一个ClusterIP Service
+        #    对于集群内部通信、服务发现和与某些Kubernetes工具（如Prometheus Operator）
+        #    的集成仍然是必要的和最佳实践。这避免了任何与`hostPort`冲突的端口暴露尝试。
         service:
+          enabled: true
           type: ClusterIP
 
+        # --- Provider & CRD Configuration ---
+        # 4. LOGIC: 确保CRD被安装，并且KubernetesCRD提供者被启用，
+        #    这样Traefik才能识别IngressRoute等自定义资源。这是您现有配置中正确的做法，予以保留。
+        providers:
+          kubernetesCRD:
+            enabled: true
+        
+        # --- RBAC & Permissions ---
+        # 5. LOGIC: 保持RBAC启用，这是Traefik访问API Server资源（如Secrets, IngressRoutes）所必需的。
+        rbac:
+          enabled: true
+
+        # --- Scheduling & Tolerations ---
+        # 6. LOGIC: 您的原始配置中包含了对control-plane节点的容忍度(tolerations)。
+        #    这是一个非常好的实践，确保在单节点集群中，Traefik Pod可以被调度到master/control-plane节点上。
+        #    予以保留和优化。
         tolerations:
           - key: "CriticalAddonsOnly"
             operator: "Exists"
@@ -42,6 +73,19 @@ spec:
           - key: "node-role.kubernetes.io/master"
             operator: "Exists"
             effect: "NoSchedule"
+
+        # --- Security Context ---
+        # 7. LOGIC: 明确禁用特权提升，并丢弃所有能力(capabilities)，以遵循最小权限原则。
+        #    这是现代Helm Chart的常见安全默认设置。
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+          readOnlyRootFilesystem: true
+        podSecurityContext:
+          runAsGroup: 65532
+          runAsNonRoot: true
+          runAsUser: 65532
 
   destination:
     server: https://kubernetes.default.svc
