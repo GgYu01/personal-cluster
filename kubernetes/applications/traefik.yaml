@@ -1,4 +1,4 @@
-# kubernetes/applications/traefik.yaml (FINAL & CORRECTED VERSION)
+# kubernetes/applications/traefik.yaml (DEFINITIVE REWORK)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -15,64 +15,55 @@ spec:
     helm:
       releaseName: traefik
       valuesObject:
+        # --- CORE ARCHITECTURE CHANGE: Use DaemonSet + hostNetwork ---
+        # LOGIC: Change deployment kind to DaemonSet. This ensures one Traefik pod runs on each node,
+        # which is the standard model for an ingress controller.
         deployment:
-          kind: Deployment
-          replicas: 1
+          kind: DaemonSet
+
+        # LOGIC: Enable hostNetwork. The pod will now directly use the host's network stack.
+        # This COMPLETELY BYPASSES the problematic hostPort and CNI port-mapping layer.
+        # Traefik will bind directly to the host's ports 80/443.
+        hostNetwork: true
         
+        # LOGIC: When hostNetwork is true, K8s requires a specific DNS policy.
+        # 'ClusterFirstWithHostNet' is the correct choice.
+        dnsPolicy: ClusterFirstWithHostNet
+
+        # --- Port Configuration (Simplified for hostNetwork) ---
+        # LOGIC: With hostNetwork: true, the `hostPort` field is IGNORED and UNNECESSARY.
+        # The container port now IS the host port. We are telling Traefik to listen
+        # on ports 80 and 443 inside its container, which, due to hostNetwork,
+        # are the actual host's ports.
         ports:
           web:
-            port: 8000
-            hostPort: 80
+            port: 80
           websecure:
-            port: 8443
-            hostPort: 443
+            port: 443
             tls:
               enabled: true
-              
+
+        # --- Service Configuration ---
+        # LOGIC: A service is still useful for internal discovery.
+        # ClusterIP is the correct type. The service ports should match Traefik's listening ports.
         service:
           type: ClusterIP
-          
+          spec:
+            clusterIP: None # Create a Headless Service, as we don't need load balancing for a DaemonSet.
+        
+        # --- RBAC, Providers, and Tolerations (Remain Important) ---
+        rbac:
+          enabled: true
+        providers:
+          kubernetesCRD:
+            enabled: true
         tolerations:
-        - key: "CriticalAddonsOnly"
-          operator: "Exists"
         - key: "node-role.kubernetes.io/control-plane"
           operator: "Exists"
           effect: "NoSchedule"
         - key: "node-role.kubernetes.io/master"
           operator: "Exists"
           effect: "NoSchedule"
-          
-        providers:
-          kubernetesCRD:
-            enabled: true
-
-        # --- SECURITY CONTEXT FIX (THE FINAL PIECE) ---
-        # LOGIC: This is the definitive fix for the 'permission denied' error.
-        # The Traefik Helm chart defaults to running as a non-root user without special
-        # privileges. To bind to privileged host ports (< 1024), the process needs
-        # specific Linux capabilities.
-        securityContext:
-          # 1. We explicitly grant the 'NET_BIND_SERVICE' capability. This is the
-          #    most secure and standard way to allow a non-root process to bind
-          #    to privileged ports.
-          capabilities:
-            drop: [ALL]
-            add: [NET_BIND_SERVICE]
-          
-          # 2. We ensure the process does not run as root, maintaining a good
-          #    security posture where possible.
-          runAsNonRoot: true
-          runAsUser: 65532 # You can use the chart's default or any non-root UID
-          
-          # 3. We prevent the process from gaining more privileges.
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-        
-        # LOGIC: Also apply a security context at the pod level.
-        podSecurityContext:
-          runAsGroup: 65532
-          runAsNonRoot: true
-          runAsUser: 65532
 
   destination:
     server: https://kubernetes.default.svc

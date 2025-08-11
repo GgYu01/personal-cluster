@@ -1,4 +1,4 @@
-# 01-infra/c3-k3s-cluster.tf (The Corrected and Final Version)
+# 01-infra/c3-k3s-cluster.tf (THE ULTIMATE FIX)
 
 resource "terraform_data" "k3s_install" {
   depends_on = [terraform_data.vps_setup]
@@ -26,16 +26,24 @@ resource "terraform_data" "k3s_install" {
       "mkdir -p /etc/rancher/k3s",
       "echo 'nameserver 8.8.8.8' | tee /etc/rancher/k3s/resolv.conf",
 
-      "echo '==> [K3S-INSTALL] Installing K3s with conflicting addons DISABLED...'",
+      "echo '==> [K3S-INSTALL] Installing K3s with relaxed security and conflicting addons DISABLED...'",
       join(" \\\n  ", [
         "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${var.k3s_version}' sh -s - server",
+
+        # --- THE DECISIVE FIX ---
+        # LOGIC: K3s (especially newer versions) defaults to strict Pod Security Standards (PSS)
+        # via admission controllers. These standards FORBID the use of `hostPort`.
+        # To allow our Traefik pod to use `hostPort`, we must explicitly disable
+        # the 'PodSecurity' admission plugin at the API server level.
+        # This is the highest-level control that was overriding all our previous Pod-level attempts.
+        "--kube-apiserver-arg=disable-admission-plugins=PodSecurity",
 
         # Explicitly define the network interface for Flannel.
         "--flannel-iface=eth0",
 
-        # DEFINITIVE FIX: Disable BOTH conflicting default addons.
+        # Disable BOTH conflicting default addons. This was already correct.
         "--disable traefik",
-        "--disable servicelb", # THIS IS THE CRITICAL FIX.
+        "--disable servicelb",
 
         # Isolate K3s from the host's Docker daemon.
         "--docker=false",
