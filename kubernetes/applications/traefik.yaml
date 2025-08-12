@@ -1,4 +1,4 @@
-# kubernetes/applications/traefik.yaml (DEFINITIVE REWORK)
+# kubernetes/applications/traefik.yaml (FINAL & CORRECTED VERSION v6.0)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -15,26 +15,15 @@ spec:
     helm:
       releaseName: traefik
       valuesObject:
-        # --- CORE ARCHITECTURE CHANGE: Use DaemonSet + hostNetwork ---
-        # LOGIC: Change deployment kind to DaemonSet. This ensures one Traefik pod runs on each node,
-        # which is the standard model for an ingress controller.
+        # --- Deployment Model ---
         deployment:
           kind: DaemonSet
 
-        # LOGIC: Enable hostNetwork. The pod will now directly use the host's network stack.
-        # This COMPLETELY BYPASSES the problematic hostPort and CNI port-mapping layer.
-        # Traefik will bind directly to the host's ports 80/443.
+        # --- Host Network Integration ---
         hostNetwork: true
-        
-        # LOGIC: When hostNetwork is true, K8s requires a specific DNS policy.
-        # 'ClusterFirstWithHostNet' is the correct choice.
         dnsPolicy: ClusterFirstWithHostNet
 
-        # --- Port Configuration (Simplified for hostNetwork) ---
-        # LOGIC: With hostNetwork: true, the `hostPort` field is IGNORED and UNNECESSARY.
-        # The container port now IS the host port. We are telling Traefik to listen
-        # on ports 80 and 443 inside its container, which, due to hostNetwork,
-        # are the actual host's ports.
+        # --- Port Definitions for hostNetwork mode ---
         ports:
           web:
             port: 80
@@ -43,15 +32,22 @@ spec:
             tls:
               enabled: true
 
-        # --- Service Configuration ---
-        # LOGIC: A service is still useful for internal discovery.
-        # ClusterIP is the correct type. The service ports should match Traefik's listening ports.
+        # --- Service for Internal Discovery ---
         service:
           type: ClusterIP
           spec:
-            clusterIP: None # Create a Headless Service, as we don't need load balancing for a DaemonSet.
-        
-        # --- RBAC, Providers, and Tolerations (Remain Important) ---
+            clusterIP: None # Headless Service
+
+        # --- THE DECISIVE FIX FOR THE HELM TEMPLATE ERROR ---
+        # LOGIC: The Traefik Helm chart has a validation check: when hostNetwork is true,
+        # the rolling update strategy's maxUnavailable cannot be 1 (the default) because
+        # it would cause port conflicts during updates. We must specify a compatible
+        # update strategy. 'OnDelete' is the simplest and safest for a DaemonSet
+        # in this scenario, preventing automatic rollouts and port conflicts.
+        updateStrategy:
+          type: OnDelete
+
+        # --- RBAC, Providers, and Tolerations (Unchanged) ---
         rbac:
           enabled: true
         providers:
