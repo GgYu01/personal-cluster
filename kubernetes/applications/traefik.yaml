@@ -32,6 +32,10 @@ spec:
             tls:
               enabled: true
 
+        securityContext:
+          capabilities:
+            add: ["NET_BIND_SERVICE"]
+
         # --- Service for Internal Discovery ---
         service:
           type: ClusterIP
