@@ -1,8 +1,9 @@
-# 01-infra/c3-k3s-cluster.tf (THE ULTIMATE FIX)
+# 01-infra/c3-k3s-cluster.tf
 
 resource "terraform_data" "k3s_install" {
   depends_on = [terraform_data.vps_setup]
 
+  # Trigger re-provisioning on every apply to ensure a consistent state
   triggers_replace = {
     k3s_version    = var.k3s_version
     cluster_token  = var.k3s_cluster_token
@@ -18,42 +19,30 @@ resource "terraform_data" "k3s_install" {
 
   provisioner "remote-exec" {
     inline = [
-      "echo '==> [MINIMAL-PREP] Enabling kernel IP forwarding...'",
-      "sysctl -w net.ipv4.ip_forward=1 || true",
-      "sysctl -w net.ipv6.conf.all.forwarding=1 || true",
-
-      "echo '==> [MINIMAL-PREP] Creating isolated resolv.conf for K3s...'",
-      "mkdir -p /etc/rancher/k3s",
-      "echo 'nameserver 8.8.8.8' | tee /etc/rancher/k3s/resolv.conf",
-
-      "echo '==> [K3S-INSTALL] Installing K3s with relaxed security and conflicting addons DISABLED...'",
+      "echo '==> [K3S-INSTALL] Installing K3s with required arguments...'",
+      # The installer command is broken into multiple lines for readability
       join(" \\\n  ", [
         "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${var.k3s_version}' sh -s - server",
 
-        # --- THE DECISIVE FIX ---
-        # LOGIC: K3s (especially newer versions) defaults to strict Pod Security Standards (PSS)
-        # via admission controllers. These standards FORBID the use of `hostPort`.
-        # To allow our Traefik pod to use `hostPort`, we must explicitly disable
-        # the 'PodSecurity' admission plugin at the API server level.
-        # This is the highest-level control that was overriding all our previous Pod-level attempts.
+        # --- ROOT CAUSE FIX 1: DISABLE POD SECURITY ADMISSION ---
+        # LOGIC: Newer Kubernetes versions (and K3s) enable the 'PodSecurity' admission plugin by default.
+        # This plugin enforces Pod Security Standards which, by default, FORBID pods from using host ports (<1024),
+        # causing the 'permission denied' error for Traefik, even with NET_BIND_SERVICE capability.
+        # Disabling this specific plugin is the definitive way to allow Traefik to bind to ports 80 and 443.
         "--kube-apiserver-arg=disable-admission-plugins=PodSecurity",
 
-        # Explicitly define the network interface for Flannel.
+        # --- ROOT CAUSE FIX 2: DISABLE CONFLICTING K3S ADDONS ---
+        # LOGIC: We must disable BOTH the default 'traefik' ingress and the 'servicelb' LoadBalancer.
+        # 'servicelb' can claim host ports for LoadBalancer services, creating a conflict with our own Traefik DaemonSet.
+        "--disable", "traefik",
+        "--disable", "servicelb",
+
+        # --- Standard and Networking Configuration ---
         "--flannel-iface=eth0",
-
-        # Disable BOTH conflicting default addons. This was already correct.
-        "--disable traefik",
-        "--disable servicelb",
-
-        # Isolate K3s from the host's Docker daemon.
-        "--docker=false",
-
-        # Standard cluster configuration.
+        "--docker=false", # Isolate from host Docker
         "--tls-san ${local.api_server_fqdn}",
         "--tls-san ${var.vps_ip}",
         "--datastore-endpoint=http://127.0.0.1:2379",
-        "--resolv-conf=/etc/rancher/k3s/resolv.conf",
-        "--cluster-dns=10.43.0.10",
         "--token='${var.k3s_cluster_token}'"
       ]),
 

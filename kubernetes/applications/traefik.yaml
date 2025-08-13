@@ -1,4 +1,4 @@
-# kubernetes/applications/traefik.yaml (FINAL & CORRECTED VERSION v6.0)
+# kubernetes/applications/traefik.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -15,15 +15,14 @@ spec:
     helm:
       releaseName: traefik
       valuesObject:
-        # --- Deployment Model ---
+        # Deploy as a DaemonSet to run on every node.
         deployment:
           kind: DaemonSet
-
-        # --- Host Network Integration ---
+        
+        # Use the host's network stack to bind to ports 80/443 directly.
         hostNetwork: true
         dnsPolicy: ClusterFirstWithHostNet
 
-        # --- Port Definitions for hostNetwork mode ---
         ports:
           web:
             port: 80
@@ -32,31 +31,25 @@ spec:
             tls:
               enabled: true
 
+        # Grant the capability to bind to privileged ports (< 1024).
         securityContext:
           capabilities:
             add: ["NET_BIND_SERVICE"]
-
-        # --- Service for Internal Discovery ---
+        
+        # This is a headless service, as Traefik is exposed directly via host ports.
         service:
           type: ClusterIP
           spec:
-            clusterIP: None # Headless Service
+            clusterIP: None
 
-        # --- THE DECISIVE FIX FOR THE HELM TEMPLATE ERROR ---
-        # LOGIC: The Traefik Helm chart has a validation check: when hostNetwork is true,
-        # the rolling update strategy's maxUnavailable cannot be 1 (the default) because
-        # it would cause port conflicts during updates. We must specify a compatible
-        # update strategy. 'OnDelete' is the simplest and safest for a DaemonSet
-        # in this scenario, preventing automatic rollouts and port conflicts.
+        # --- HELM CHART FIX ---
+        # LOGIC: When using hostNetwork, the default 'RollingUpdate' strategy can cause port conflicts
+        # during updates on a single node. 'OnDelete' is a safer strategy for DaemonSets in this mode,
+        # requiring manual pod deletion to trigger an update.
         updateStrategy:
           type: OnDelete
 
-        # --- RBAC, Providers, and Tolerations (Unchanged) ---
-        rbac:
-          enabled: true
-        providers:
-          kubernetesCRD:
-            enabled: true
+        # Allow Traefik to run on the control-plane node.
         tolerations:
         - key: "node-role.kubernetes.io/control-plane"
           operator: "Exists"
@@ -64,6 +57,16 @@ spec:
         - key: "node-role.kubernetes.io/master"
           operator: "Exists"
           effect: "NoSchedule"
+        
+        # Enable Kubernetes CRD provider for IngressRoutes.
+        providers:
+          kubernetesCRD:
+            enabled: true
+            allowEmptyServices: true
+        
+        # Enable RBAC for Traefik.
+        rbac:
+          enabled: true
 
   destination:
     server: https://kubernetes.default.svc

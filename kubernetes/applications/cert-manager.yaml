@@ -1,4 +1,4 @@
-# kubernetes/core-services/cert-manager.yaml
+# kubernetes/applications/cert-manager.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -15,7 +15,9 @@ spec:
     helm:
       releaseName: cert-manager
       values: |
-        installCRDs: true
+        # HELM CHART FIX: Use the modern 'crds.enabled' instead of the deprecated 'installCRDs'.
+        crds:
+          enabled: true
         prometheus:
           enabled: false
   destination:
