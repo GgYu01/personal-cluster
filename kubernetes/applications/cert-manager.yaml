@@ -5,6 +5,7 @@ metadata:
   name: cert-manager
   namespace: argocd
   annotations:
+    # 保证 cert-manager 是第一个被部署的应用
     argocd.argoproj.io/sync-wave: "-10"
 spec:
   project: default
@@ -15,11 +16,17 @@ spec:
     helm:
       releaseName: cert-manager
       values: |
-        # HELM CHART FIX: Use the modern 'crds.enabled' instead of the deprecated 'installCRDs'.
+        # 使用现代的、推荐的方式来安装 CRD
         crds:
           enabled: true
+        # 我们不需要 Prometheus metrics
         prometheus:
           enabled: false
+        # 启用 startupapicheck job，这是解决 webhook 就绪性问题的关键
+        startupapicheck:
+          enabled: true
+          # 增加超时时间以应对慢速网络或节点负载
+          timeout: 5m
   destination:
     server: https://kubernetes.default.svc
     namespace: cert-manager
@@ -29,3 +36,15 @@ spec:
       selfHeal: true
     syncOptions:
     - CreateNamespace=true
+  # --- 关键修复：添加 Sync Hook ---
+  # 告诉 ArgoCD，在认为 cert-manager 这个 Application 同步完成之前，
+  # 必须等待 cert-manager-startupapicheck 这个 Job 成功完成。
+  # 这就强制保证了 webhook 在后续应用部署前是可用的。
+  syncWindows:
+  - kind: post-sync
+    manual: false
+    resources:
+    - group: "batch"
+      kind: "Job"
+      name: "cert-manager-startupapicheck"
+      namespace: "cert-manager"

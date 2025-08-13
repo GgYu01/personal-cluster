@@ -38,7 +38,7 @@ if [ ! -f "$KUBECONFIG" ]; then
 fi
 echo "Using Kubeconfig from: $KUBECONFIG"
 echo "Verifying kubectl connectivity..."
-kubectl version --short || { echo "kubectl command failed. Is the cluster accessible?"; exit 1; }
+kubectl version || { echo "kubectl command failed. Is the cluster accessible?"; exit 1; }
 
 # 1. Host-level Diagnostics
 print_header "DIAG-HOST" "Listening ports on host (ss -tlpn)"

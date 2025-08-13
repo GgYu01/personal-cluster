@@ -32,8 +32,10 @@ export TF_VAR_ssh_private_key_path="~/.ssh/id_rsa"
 export TF_VAR_k3s_version="v1.33.3+k3s1"
 export TF_VAR_k3s_cluster_token="admin"
 
+export TF_VAR_gitops_repo_url="https://github.com/GgYu01/personal-cluster.git"
+
 ARGOCD_NS="argocd"
-ARGOCD_CHART_VERSION="7.3.6"
+ARGOCD_CHART_VERSION="8.2.7"
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="password" # As requested, for simplicity.
 
@@ -57,11 +59,11 @@ trigger_diagnostics() {
     if [ $exit_code -ne 0 ]; then
         echo -e "\n\033[1;31mDeployment script failed with exit code $exit_code. Running diagnostics...\033[0m\n"
         # Ensure the diagnostic script is executable and run it
-        if [ -f ./collect_diagnostics.sh ]; then
-            chmod +x ./collect_diagnostics.sh
-            ./collect_diagnostics.sh
+        if [ -f /root/personal-cluster/temp.sh ]; then
+            chmod +x /root/personal-cluster/temp.sh
+            /root/personal-cluster/temp.sh
         else
-            echo "collect_diagnostics.sh not found. Cannot run diagnostics."
+            echo "/root/personal-cluster/temp.sh not found. Cannot run diagnostics."
         fi
     fi
 }
