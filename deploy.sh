@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-# DEPLOYMENT ORCHESTRATOR (v24.0 - Maximum Permissions & Hardened Checks)
+# DEPLOYMENT ORCHESTRATOR (v25.0 - Security Module Hardening)
 # ==============================================================================
-# This version implements the "Maximum Permissions" strategy to resolve port
-# binding issues. It disables system firewalls, sets SELinux to permissive,
-# and runs Traefik in privileged mode. It also uses layered verification.
+# This version addresses the Kubelet "InvalidDiskCapacity" error by explicitly
+# disabling SELinux and AppArmor in the K3s installation arguments. It also
+# reverts to the robust two-stage CoreDNS health check.
 
 set -eo pipefail
 
@@ -72,7 +72,7 @@ main() {
     local step_counter=1
     trap 'echo -e "\n\033[0;31mFATAL: Deployment script failed at STEP $((step_counter - 1)). See ${LOG_FILE} for full details.\033[0m" >&2; failure_dump' ERR
 
-    echo "### DEPLOYMENT ORCHESTRATOR (v24.0) INITIATED AT $(date) ###"
+    echo "### DEPLOYMENT ORCHESTRATOR (v25.0) INITIATED AT $(date) ###"
     echo "Full log will be saved to: ${LOG_FILE}"
 
     log_step $step_counter "DNS Prerequisite Verification"; ((step_counter++))
@@ -90,7 +90,6 @@ main() {
     ${SSH_CMD} "${SSH_USER}@${VPS_IP}" <<'EOF'
         set -ex
         
-        # --- MAXIMUM PERMISSIONS PHASE ---
         echo '--> [PERM] Disabling AppArmor...'
         if command -v systemctl &> /dev/null && systemctl is-active --quiet apparmor; then
             systemctl stop apparmor
@@ -106,7 +105,6 @@ main() {
         echo '--> [PERM] Setting SELinux to Permissive mode...'
         if command -v setenforce &> /dev/null; then setenforce 0; fi || echo "setenforce not found, SELinux likely not installed."
 
-        # --- CLEANUP PHASE ---
         echo '--> [CLEANUP] Uninstalling K3s if it exists...'
         if [ -f /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; fi
         if [ -f /usr/local/bin/k3s-agent-uninstall.sh ]; then /usr/local/bin/k3s-agent-uninstall.sh; fi
@@ -156,7 +154,6 @@ EOF
     echo "--> SUCCESS: K3s installation script execution verified."
 
     log_step $step_counter "Post-Terraform Verification"; ((step_counter++))
-    # A simple check is enough here
     ${SSH_CMD} "${SSH_USER}@${VPS_IP}" "docker exec core-etcd etcdctl endpoint health" | grep -q "is healthy"
     echo "--> SUCCESS: etcd is healthy."
 
@@ -170,8 +167,22 @@ EOF
     echo "--> Waiting for K3s node to become Ready..."
     kubectl wait --for=condition=Ready node --all --timeout=5m
 
-    echo "--> Waiting for CoreDNS to be available..."
-    kubectl rollout status deployment/coredns -n kube-system --timeout=5m
+    echo "--> Stage 1: Waiting for CoreDNS Deployment object to be created by K3s..."
+    local coredns_attempts=0
+    local max_coredns_attempts=24
+    while ! kubectl get deployment coredns -n kube-system &> /dev/null; do
+        ((coredns_attempts++))
+        if ((coredns_attempts > max_coredns_attempts)); then
+            echo "FATAL: Timed out waiting for CoreDNS deployment to be created." >&2
+            exit 1
+        fi
+        echo "    (Attempt ${coredns_attempts}/${max_coredns_attempts}) CoreDNS deployment not found, retrying in 5 seconds..."
+        sleep 5
+    done
+    echo "--> SUCCESS: CoreDNS Deployment object found."
+
+    echo "--> Stage 2: Waiting for CoreDNS to be available..."
+    kubectl wait --for=condition=Available deployment/coredns -n kube-system --timeout=5m
     echo "--> SUCCESS: Cluster is healthy and kubeconfig is set up."
 
     log_step $step_counter "GitOps Bootstrap (ArgoCD)"; ((step_counter++))
@@ -198,7 +209,6 @@ EOF
     echo "--> SUCCESS: Traefik DaemonSet is ready."
 
     echo "--> 3/5: Verifying Traefik is listening on host ports..."
-    # This check is now more of a sanity check, as the rollout status is the primary indicator.
     ${SSH_CMD} "${SSH_USER}@${VPS_IP}" "ss -tlpn | grep -E ':(80|443)'"
     echo "--> SUCCESS: Traefik is listening on host ports 80 & 443."
 
