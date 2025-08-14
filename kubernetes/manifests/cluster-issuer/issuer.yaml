@@ -15,4 +15,7 @@ spec:
           email: 1405630484@qq.com
           apiTokenSecretRef:
             name: cloudflare-api-token-secret
+            # BEST PRACTICE: Explicitly define the namespace where the secret resides.
+            # This is crucial for ClusterIssuers.
+            namespace: cert-manager
             key: api-token

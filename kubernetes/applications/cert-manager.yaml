@@ -5,28 +5,23 @@ metadata:
   name: cert-manager
   namespace: argocd
   annotations:
-    # 保证 cert-manager 是第一个被部署的应用
     argocd.argoproj.io/sync-wave: "-10"
 spec:
   project: default
   source:
     repoURL: https://charts.jetstack.io
     chart: cert-manager
-    targetRevision: v1.18.2
+    targetRevision: v1.18.2 # As per your version spec
     helm:
       releaseName: cert-manager
       values: |
-        # 使用现代的、推荐的方式来安装 CRD
-        crds:
-          enabled: true
-        # 我们不需要 Prometheus metrics
-        prometheus:
-          enabled: false
-        # 启用 startupapicheck job，这是解决 webhook 就绪性问题的关键
+        installCRDs: true # For older chart versions compatibility, this is a reliable way to ensure CRDs are installed.
         startupapicheck:
           enabled: true
-          # 增加超时时间以应对慢速网络或节点负载
+          # Give it ample time to succeed, especially on slower networks or busy nodes.
           timeout: 5m
+        prometheus:
+          enabled: false
   destination:
     server: https://kubernetes.default.svc
     namespace: cert-manager
@@ -36,15 +31,41 @@ spec:
       selfHeal: true
     syncOptions:
     - CreateNamespace=true
-  # --- 关键修复：添加 Sync Hook ---
-  # 告诉 ArgoCD，在认为 cert-manager 这个 Application 同步完成之前，
-  # 必须等待 cert-manager-startupapicheck 这个 Job 成功完成。
-  # 这就强制保证了 webhook 在后续应用部署前是可用的。
-  syncWindows:
-  - kind: post-sync
-    manual: false
-    resources:
-    - group: "batch"
-      kind: "Job"
-      name: "cert-manager-startupapicheck"
-      namespace: "cert-manager"
+    # REFACTOR: Remove incorrect 'syncWindows' and add robust 'PostSync' hook.
+    # This hook ensures that the entire Application is not considered 'Synced' until
+    # the cert-manager webhook is verified as ready by its own startupapicheck Job.
+    hooks:
+    - name: wait-for-startup-check
+      # This hook runs AFTER all resources from the cert-manager chart are applied.
+      hookType: PostSync
+      # This Job will be deleted automatically once it completes successfully.
+      deletePolicy: HookSucceeded
+      # The Job manifest itself.
+      manifest: |
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          generateName: wait-for-cm-startup-
+          namespace: cert-manager
+          annotations:
+            # This annotation tells Argo CD to treat this as a hook, not a regular resource.
+            argocd.argoproj.io/hook: PostSync
+            argocd.argoproj.io/hook-delete-policy: HookSucceeded
+        spec:
+          template:
+            spec:
+              containers:
+              - name: checker
+                image: bitnami/kubectl:latest # A lightweight image with kubectl
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    echo "Waiting for cert-manager-startupapicheck job to complete...";
+                    # This command will wait until the 'startupapicheck' job has a condition of 'Complete'.
+                    # It will timeout after 5 minutes, failing the sync if the check doesn't succeed.
+                    kubectl wait --for=condition=complete job -l 'app.kubernetes.io/instance=cert-manager,app.kubernetes.io/component=startupapicheck' -n cert-manager --timeout=5m;
+                    echo "Cert-manager webhook is ready.";
+              restartPolicy: Never
+              serviceAccountName: default # Uses default SA in the namespace
+          backoffLimit: 1
