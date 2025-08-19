@@ -11,7 +11,7 @@ spec:
   source:
     repoURL: https://traefik.github.io/charts
     chart: traefik
-    targetRevision: 37.0.0
+    targetRevision: 37.0.0 # Using a specific chart version as per your initial info
     helm:
       releaseName: traefik
       valuesObject:
@@ -25,19 +25,16 @@ spec:
         hostNetwork: true
         dnsPolicy: ClusterFirstWithHostNet
         
-        # --- [START OF CORRECTION] ---
-        # According to Kubernetes Pod Security Standards, if a container is privileged,
-        # its security context's allowPrivilegeEscalation must not be false.
-        # By explicitly setting it to true, we resolve the API validation error.
         securityContext:
           capabilities:
             add:
             - NET_BIND_SERVICE
           privileged: true
-          allowPrivilegeEscalation: true # This line is added to resolve the conflict.
+          # allowPrivilegeEscalation is implicitly true when privileged is true,
+          # but being explicit can avoid confusion.
+          allowPrivilegeEscalation: true
           runAsUser: 0
           runAsGroup: 0
-        # --- [END OF CORRECTION] ---
 
         ports:
           web:
@@ -77,3 +74,15 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+    # --- [START OF CORRECTION] ---
+    # This managedNamespaceMetadata block will ensure Argo CD labels the 'traefik'
+    # namespace correctly for the Pod Security Admission controller.
+    # This tells K3s to apply the 'privileged' security standard to this namespace,
+    # which allows running containers as root (runAsUser: 0) and with high privileges,
+    # resolving the "breaks non-root policy" error.
+    managedNamespaceMetadata:
+      labels:
+        pod-security.kubernetes.io/enforce: privileged
+        pod-security.kubernetes.io/audit: privileged
+        pod-security.kubernetes.io/warn: privileged
+    # --- [END OF CORRECTION] ---
