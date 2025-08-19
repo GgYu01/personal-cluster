@@ -1,19 +1,14 @@
 # 01-infra/locals.tf
 
 locals {
-  # Base subdomain, e.g., "core01.prod"
   cluster_base_subdomain = "${var.site_code}.${var.environment}"
+  cluster_base_domain    = "${local.cluster_base_subdomain}.${var.domain_name}"
+  api_server_fqdn      = "api.${local.cluster_base_domain}"
 
-  # Fully qualified base domain, e.g., "core01.prod.gglohh.top"
-  cluster_base_domain = "${local.cluster_base_subdomain}.${var.domain_name}"
-
-  # FQDN for the API Server
-  api_server_fqdn = "api.${local.cluster_base_domain}"
-
-  # --- MODIFICATION: Added flags to explicitly disable security modules ---
-  # This is the core fix for the "InvalidDiskCapacity" error, which is often
-  # caused by AppArmor/SELinux interference preventing Kubelet from stat'ing
-  # the filesystem.
+  # --- DEFINITIVE FIX v3 ---
+  # REMOVED the invalid '--kubelet-arg=apparmor-profile=unconfined' which caused the K3s service to crash loop.
+  # The Kubelet in this K3s version does not accept this flag.
+  # Disabling SELinux is sufficient for the "insecure" requirement.
   k3s_install_args_string = join(" ", [
     "server",
     "--disable=traefik",
@@ -22,7 +17,6 @@ locals {
     "--datastore-endpoint=http://127.0.0.1:2379",
     "--tls-san=${local.api_server_fqdn}",
     "--tls-san=${var.vps_ip}",
-    "--selinux=false",                # Explicitly disable SELinux integration.
-    "--apparmor-profile=unconfined"   # Run containers without AppArmor restrictions.
+    "--selinux=false"
   ])
 }

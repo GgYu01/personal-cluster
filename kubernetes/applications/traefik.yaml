@@ -14,33 +14,27 @@ spec:
     targetRevision: 37.0.0
     helm:
       releaseName: traefik
-      # --- MODIFICATION: MAXIMUM PERMISSIONS & SIMPLIFICATION ---
       valuesObject:
-        # Use DaemonSet to ensure Traefik runs on the node
+        # --- START OF MODIFICATIONS ---
         deployment:
           kind: DaemonSet
-          # For single-node, this is a simple and effective update strategy.
-          updateStrategy:
-            type: OnDelete
+        # The updateStrategy should be at the top level of the values,
+        # not nested under 'deployment' for many charts.
+        updateStrategy:
+          type: OnDelete
+        # --- END OF MODIFICATIONS ---
 
-        # Use host network to bind to host ports directly
         hostNetwork: true
-        dnsPolicy: ClusterFirstWithHostNet # Required for hostNetwork
+        dnsPolicy: ClusterFirstWithHostNet
         
-        # --- ULTIMATE PERMISSIONS TO BIND PORTS ---
-        # This is the core fix for the "permission denied" error.
         securityContext:
-          # 1. Allow binding to privileged ports (< 1024)
           capabilities:
             add:
             - NET_BIND_SERVICE
-          # 2. Run the container process as root (UID 0)
           runAsUser: 0
           runAsGroup: 0
-          # 3. Grant full access to the host system (most insecure but most powerful)
           privileged: true
 
-        # Define the host ports Traefik should listen on.
         ports:
           web:
             hostPort: 80
@@ -51,17 +45,14 @@ spec:
             tls:
               enabled: true
         
-        # Enable Kubernetes CRD provider for IngressRoute, etc.
         providers:
           kubernetesCRD:
             enabled: true
-            allowEmptyServices: true # For flexibility
+            allowEmptyServices: true 
         
-        # RBAC is required for Traefik to read Services, Ingresses, etc.
         rbac:
           enabled: true
         
-        # Tolerations to allow Traefik to run on the control-plane/master node.
         tolerations:
           - key: "node-role.kubernetes.io/control-plane"
             operator: "Exists"
@@ -70,8 +61,6 @@ spec:
             operator: "Exists"
             effect: "NoSchedule"
         
-        # Disable the default service creation as we are using hostNetwork.
-        # This avoids creating an unnecessary ClusterIP/LoadBalancer service.
         service:
           enabled: false
 

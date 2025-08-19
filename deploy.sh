@@ -1,237 +1,168 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # ==============================================================================
-# DEPLOYMENT ORCHESTRATOR (v25.0 - Security Module Hardening)
+#
+# PERSONAL CLUSTER DEPLOYMENT INSTALLER (v3.6 - INTEGRATED GITOPS DEBUGGING)
+#
 # ==============================================================================
-# This version addresses the Kubelet "InvalidDiskCapacity" error by explicitly
-# disabling SELinux and AppArmor in the K3s installation arguments. It also
-# reverts to the robust two-stage CoreDNS health check.
+#
+#   VERSION 3.6 CHANGE:
+#   - INTEGRATED DEBUGGING: The script now calls a dedicated 'temp.sh'
+#     script upon failure. This provides a deep dive into the state of
+#     ArgoCD applications, controllers, and managed resources, allowing for
+#     precise diagnosis of GitOps-layer issues.
+#
+# ==============================================================================
 
 set -eo pipefail
 
-# --- Configuration Variables (Unchanged) ---
-readonly DOMAIN_NAME="gglohh.top"
-readonly SITE_CODE="core01"
-readonly ENVIRONMENT="prod"
-readonly ACME_EMAIL="1405630484@qq.com"
-readonly VPS_IP="172.245.187.113"
-readonly SSH_USER="root"
-readonly SSH_PRIVATE_KEY_PATH="~/.ssh/id_rsa"
-readonly GITOPS_REPO_URL="https://github.com/GgYu01/personal-cluster.git"
-readonly K3S_VERSION="v1.33.3+k3s1"
-readonly ARGOCD_CHART_VERSION="8.2.7" 
-readonly K3S_CLUSTER_TOKEN="admin"
-readonly ARGOCD_ADMIN_USER="admin"
-readonly ETCD_PROJECT_NAME="personal-cluster-etcd"
+# --- [SECTION 1: CONFIGURATION VARIABLES] ---
+readonly VPS_IP="172.245.187.113"; readonly DOMAIN_NAME="gglohh.top"; readonly SITE_CODE="core01"; readonly ENVIRONMENT="prod"; readonly K3S_VERSION="v1.33.3+k3s1"; readonly K3S_CLUSTER_TOKEN="admin"; readonly ETCD_PROJECT_NAME="personal-cluster-etcd"; readonly ETCD_CONTAINER_NAME="core-etcd"; readonly GITOPS_REPO_URL="https://github.com/GgYu01/personal-cluster.git"; readonly ARGOCD_CHART_VERSION="8.2.7"; readonly ARGOCD_ADMIN_USER="admin"
 
-# --- Script-derived Variables (Unchanged) ---
-readonly LOG_FILE="deployment-$(date +%Y%m%d-%H%M%S).log"
-readonly ARGOCD_NS="argocd"
-readonly TRAEFIK_NS="traefik"
-readonly API_SERVER_FQDN="api.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
-readonly ARGOCD_FQDN="argocd.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
-readonly SSH_CMD="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -i ${SSH_PRIVATE_KEY_PATH}"
-readonly TF_DIR="01-infra"
-readonly KUBECONFIG_PATH="${HOME}/.kube/config"
+# --- [SECTION 2: SCRIPT-DERIVED VARIABLES & HELPERS] ---
+readonly API_SERVER_FQDN="api.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"; readonly ARGOCD_FQDN="argocd.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"; readonly KUBECONFIG_PATH="${HOME}/.kube/config"; readonly LOG_FILE_NAME="deployment-$(date +%Y%m%d-%H%M%S).log"; readonly LOG_FILE="$(pwd)/${LOG_FILE_NAME}"
 
-# --- Helper Functions (Unchanged) ---
-log_step() {
-    echo -e "\n\n\033[1;34m# ============================================================================== #\033[0m"
-    echo -e "\033[1;34m# STEP ${1}: ${2} (Timestamp: $(date -u --iso-8601=seconds))\033[0m"
-    echo -e "\033[1;34m# ============================================================================== #\033[0m\n"
-}
+log_step() { echo -e "\n\n\033[1;34m# ============================================================================== #\033[0m"; echo -e "\033[1;34m# STEP ${1}: ${2} (Timestamp: $(date -u --iso-8601=seconds))\033[0m"; echo -e "\033[1;34m# ============================================================================== #\033[0m\n"; }
+log_info() { echo "--> INFO: $1"; }
+log_success() { echo -e "\033[1;32m✅ SUCCESS:\033[0m $1"; }
+log_error_and_exit() { echo -e "\n\033[1;31m❌ FATAL ERROR:\033[0m $1" >&2; echo -e "\033[1;31mDeployment failed. See ${LOG_FILE} for full details.\033[0m" >&2; exit 1; }
 
+# [MODIFIED] Enhanced failure dump function to include ArgoCD diagnostics
 failure_dump() {
-    echo -e "\n\033[1;31m# ============================================================================== #\033[0m"
-    echo -e "\033[1;31m#                      CAPTURING KUBERNETES FAILURE DUMP                       #\033[0m"
-    echo -e "\033[1;31m# ============================================================================== #\033[0m\n"
-    if ! [ -f "${KUBECONFIG_PATH}" ]; then
-        echo "Kubeconfig not found, cannot perform dump."
-        return
+    echo -e "\n\033[1;33m--- CAPTURING FAILURE STATE DUMP ---\033[0m" >&2
+    if [ -f ./temp.sh ]; then
+        chmod +x ./temp.sh
+        ./temp.sh >&2
+    else
+        echo "WARNING: temp.sh not found. Skipping deep dive diagnostics." >&2
     fi
-    export KUBECONFIG="${KUBECONFIG_PATH}"
-    
-    echo ">>> [DUMP] Checking kubectl connectivity..."
-    kubectl version || echo "kubectl connection failed."
-    echo "\n>>> [DUMP] Getting all resources in all namespaces..."
-    kubectl get all -A -o wide
-    echo "\n>>> [DUMP] Describing all pods in all namespaces..."
-    kubectl describe pod -A
-    echo "\n>>> [DUMP] Getting all ArgoCD Applications..."
-    kubectl get applications -A -o yaml || echo "Failed to get ArgoCD Applications."
-    echo "\n>>> [DUMP] CRASH LOGS: Previous logs from any crashing pod..."
-    kubectl get pods -A | awk '$4 ~ /CrashLoopBackOff|Error/ {print ">>> Getting previous logs for pod " $2 " in namespace " $1; system("kubectl logs -n " $1 " " $2 " --previous")}'
-    echo "\n>>> [DUMP] Getting cluster events (last 30)..."
-    kubectl get events -A --sort-by='.lastTimestamp' | tail -n 30
-    echo -e "\n\033[1;31m#                            FAILURE DUMP COMPLETE                             #\033[0m\n"
 }
 
-# --- Main Execution Logic ---
+# --- [SECTION 3: MAIN EXECUTION LOGIC] ---
 main() {
+    if [[ $EUID -ne 0 ]]; then echo "FATAL ERROR: This script must be run as root." >&2; exit 1; fi
+    touch "${LOG_FILE}" &>/dev/null || { echo "FATAL ERROR: Cannot write to log file at ${LOG_FILE}." >&2; exit 1; }
     exec &> >(tee -a "$LOG_FILE")
-    local step_counter=1
-    trap 'echo -e "\n\033[0;31mFATAL: Deployment script failed at STEP $((step_counter - 1)). See ${LOG_FILE} for full details.\033[0m" >&2; failure_dump' ERR
+    local step_counter=0
+    trap 'failure_dump; log_error_and_exit "Script exited due to an error in STEP ${step_counter}."' ERR
 
-    echo "### DEPLOYMENT ORCHESTRATOR (v25.0) INITIATED AT $(date) ###"
-    echo "Full log will be saved to: ${LOG_FILE}"
+    log_info "Deployment Installer (v3.6 - Local) initiated. Full log: ${LOG_FILE}"
 
-    log_step $step_counter "DNS Prerequisite Verification"; ((step_counter++))
-    echo "--> Verifying wildcard DNS record '*.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}' points to ${VPS_IP}..."
-    local resolved_ip
-    resolved_ip=$(dig @"1.1.1.1" "test-wildcard.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}" +short)
-    if [[ "${resolved_ip}" != "${VPS_IP}" ]]; then
-        echo "FATAL: DNS Query failed or incorrect. Expected '${VPS_IP}', but got '${resolved_ip}'." >&2
-        exit 1
-    fi
-    echo "--> SUCCESS: DNS prerequisite is met."
+    # --- PHASE 1: PREPARATION & DEEP-CLEAN ---
+    step_counter=$((step_counter + 1)); log_step $step_counter "System Deep Cleanup"
+    log_info "Performing a comprehensive cleanup..."
+    set -x
+    if systemctl list-units --type=service --all | grep -q "k3s.service"; then systemctl stop k3s.service || true; systemctl disable k3s.service || true; fi
+    if [ -f /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; fi
+    if [ -f /opt/etcd/docker-compose.yml ]; then (cd /opt/etcd && docker-compose --project-name "${ETCD_PROJECT_NAME}" down --rmi all --volumes --remove-orphans) || echo "ETCD compose down failed."; fi
+    rm -rf /etc/rancher /var/lib/rancher /var/lib/kubelet /opt/etcd /tmp/k3s-*
+    rm -f /etc/systemd/system/k3s.service /etc/systemd/system/k3s.service.env
+    systemctl daemon-reload
+    journalctl --rotate && journalctl --vacuum-time=1s && journalctl -u k3s --vacuum-time=1s || true
+    set +x
+    log_success "System has been cleaned."
 
-    log_step $step_counter "Remote Host Deep Cleanup & MAX PERMISSIONS"; ((step_counter++))
-    echo "--> Performing targeted cleanup and applying maximum permissions on ${VPS_IP}..."
-    ${SSH_CMD} "${SSH_USER}@${VPS_IP}" <<'EOF'
-        set -ex
-        
-        echo '--> [PERM] Disabling AppArmor...'
-        if command -v systemctl &> /dev/null && systemctl is-active --quiet apparmor; then
-            systemctl stop apparmor
-            systemctl disable apparmor
-        else
-            echo "AppArmor not active or not installed."
-        fi
-
-        echo '--> [PERM] Disabling firewalls (UFW, firewalld)...'
-        if command -v ufw &> /dev/null; then ufw disable; fi || echo "UFW not found."
-        if command -v systemctl &> /dev/null && systemctl is-active --quiet firewalld; then systemctl stop firewalld && systemctl disable firewalld; fi || echo "firewalld not active."
-
-        echo '--> [PERM] Setting SELinux to Permissive mode...'
-        if command -v setenforce &> /dev/null; then setenforce 0; fi || echo "setenforce not found, SELinux likely not installed."
-
-        echo '--> [CLEANUP] Uninstalling K3s if it exists...'
-        if [ -f /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh; fi
-        if [ -f /usr/local/bin/k3s-agent-uninstall.sh ]; then /usr/local/bin/k3s-agent-uninstall.sh; fi
-        pkill -9 -f "k3s|containerd|flannel" || echo "No lingering K3s processes to kill."
-
-        echo '--> [CLEANUP] Stopping and removing deployment-specific etcd container...'
-        if command -v docker &> /dev/null; then
-            docker rm -f core-etcd || echo "Container 'core-etcd' not found or already removed."
-        fi
-        
-        echo '--> [CLEANUP] Removing residual files and directories...'
-        rm -rf /etc/rancher /var/lib/rancher /var/lib/kubelet /run/k3s /opt/etcd /var/lib/cni/ /etc/cni/net.d /tmp/k3s-install-wrapper.sh /tmp/k3s-install-output.log
-
-        echo '--> [CLEANUP] Clearing old journald logs for relevant services...'
-        journalctl --rotate
-        journalctl --vacuum-time=1s
-        
-        echo '--> [CLEANUP] Restarting Docker daemon to reset network state...'
-        systemctl restart docker
-
-        echo '--> [CLEANUP] Reloading systemd daemon...'
-        systemctl daemon-reload
+    # --- PHASE 2: CORE DEPENDENCIES DEPLOYMENT & VERIFICATION ---
+    step_counter=$((step_counter + 1)); log_step $step_counter "Deploy and Verify External ETCD"
+    log_info "Deploying ETCD via Docker Compose."
+    mkdir -p /opt/etcd/data && chown -R 1001:1001 /opt/etcd/data
+cat > /opt/etcd/docker-compose.yml << EOF
+version: "3.8"
+services:
+  etcd: {image: bitnami/etcd:3.5.9, container_name: ${ETCD_CONTAINER_NAME}, restart: "no", ports: ["127.0.0.1:2379:2379"], volumes: ["/opt/etcd/data:/bitnami/etcd"], environment: [ALLOW_NONE_AUTHENTICATION=yes, ETCD_ADVERTISE_CLIENT_URLS=http://127.0.0.1:2379]}
 EOF
-    echo "--> SUCCESS: Remote host cleaned and permissions maximized."
-
-    log_step $step_counter "Terraform Infrastructure Provisioning"; ((step_counter++))
-    (
-        cd "${TF_DIR}" || exit 1
-        rm -f .terraform.lock.hcl terraform.tfstate*
-        terraform init -upgrade
-        terraform apply -auto-approve \
-            -var="vps_ip=${VPS_IP}" \
-            -var="ssh_user=${SSH_USER}" \
-            -var="ssh_private_key_path=${SSH_PRIVATE_KEY_PATH}" \
-            -var="domain_name=${DOMAIN_NAME}" \
-            -var="site_code=${SITE_CODE}" \
-            -var="environment=${ENVIRONMENT}" \
-            -var="k3s_version=${K3S_VERSION}" \
-            -var="k3s_cluster_token=${K3S_CLUSTER_TOKEN}" \
-            -var="gitops_repo_url=${GITOPS_REPO_URL}" \
-            -var="etcd_project_name=${ETCD_PROJECT_NAME}"
-    )
-    echo "--> SUCCESS: Core infrastructure provisioned."
-
-    log_step $step_counter "Verifying K3s Installation Script Execution"; ((step_counter++))
-    ${SSH_CMD} "${SSH_USER}@${VPS_IP}" "grep -q 'K3s Installation Script Finished Successfully' /tmp/k3s-install-output.log"
-    echo "--> SUCCESS: K3s installation script execution verified."
-
-    log_step $step_counter "Post-Terraform Verification"; ((step_counter++))
-    ${SSH_CMD} "${SSH_USER}@${VPS_IP}" "docker exec core-etcd etcdctl endpoint health" | grep -q "is healthy"
-    echo "--> SUCCESS: etcd is healthy."
-
-    log_step $step_counter "Local Kubeconfig Setup & Cluster Health Check"; ((step_counter++))
-    echo "--> Fetching and configuring local kubeconfig..."
-    RAW_KUBECONFIG=$(${SSH_CMD} "${SSH_USER}@${VPS_IP}" "cat /etc/rancher/k3s/k3s.yaml")
-    PROCESSED_KUBECONFIG=$(echo "${RAW_KUBECONFIG}" | sed "s/127.0.0.1/${API_SERVER_FQDN}/" | sed "s/default/personal-cluster/")
-    mkdir -p "$(dirname "${KUBECONFIG_PATH}")" && echo "${PROCESSED_KUBECONFIG}" > "${KUBECONFIG_PATH}" && chmod 600 "${KUBECONFIG_PATH}"
-    export KUBECONFIG="${KUBECONFIG_PATH}"
-    
-    echo "--> Waiting for K3s node to become Ready..."
-    kubectl wait --for=condition=Ready node --all --timeout=5m
-
-    echo "--> Stage 1: Waiting for CoreDNS Deployment object to be created by K3s..."
-    local coredns_attempts=0
-    local max_coredns_attempts=24
-    while ! kubectl get deployment coredns -n kube-system &> /dev/null; do
-        ((coredns_attempts++))
-        if ((coredns_attempts > max_coredns_attempts)); then
-            echo "FATAL: Timed out waiting for CoreDNS deployment to be created." >&2
-            exit 1
-        fi
-        echo "    (Attempt ${coredns_attempts}/${max_coredns_attempts}) CoreDNS deployment not found, retrying in 5 seconds..."
-        sleep 5
+    (cd /opt/etcd && docker-compose --project-name "${ETCD_PROJECT_NAME}" up -d)
+    log_success "ETCD docker-compose command executed."
+    log_info "Verifying ETCD health..."
+    local etcd_attempts=0; local max_etcd_attempts=12
+    until docker exec ${ETCD_CONTAINER_NAME} etcdctl endpoint health | grep -q 'is healthy'; do
+        etcd_attempts=$((etcd_attempts + 1))
+        if [ "${etcd_attempts}" -gt "${max_etcd_attempts}" ]; then log_error_and_exit "ETCD failed to become healthy."; fi
+        log_info "Waiting for ETCD... (attempt ${etcd_attempts}/${max_etcd_attempts})"; sleep 5
     done
-    echo "--> SUCCESS: CoreDNS Deployment object found."
+    log_success "External ETCD is running and healthy."
 
-    echo "--> Stage 2: Waiting for CoreDNS to be available..."
+    # --- PHASE 3: K3S CUSTOM INSTALLATION & FIX ---
+    step_counter=$((step_counter + 1)); log_step $step_counter "K3s Custom Installation"
+    local k3s_exec_args="server --datastore-endpoint=http://127.0.0.1:2379 --tls-san=${API_SERVER_FQDN} --tls-san=${VPS_IP} --disable=traefik --disable=servicelb --disable-cloud-controller --flannel-iface=eth0 --selinux=false"
+    log_info "Installing K3s with exec arguments: ${k3s_exec_args}"
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${K3S_VERSION}" K3S_TOKEN="${K3S_CLUSTER_TOKEN}" INSTALL_K3S_EXEC="${k3s_exec_args}" sh -
+    log_success "K3s installation script has been executed."
+    log_info "Verifying K3s systemd service is active..."
+    local k3s_service_attempts=0; local max_k3s_service_attempts=12
+    until systemctl is-active --quiet k3s.service; do
+        k3s_service_attempts=$((k3s_service_attempts + 1))
+        if [ "${k3s_service_attempts}" -gt "${max_k3s_service_attempts}" ]; then log_error_and_exit "K3s service failed to become active."; fi
+        log_info "Waiting for K3s service... (attempt ${k3s_service_attempts}/${max_k3s_service_attempts})"; sleep 5
+    done
+    log_success "K3s systemd service is active."
+
+    # --- PHASE 4: IN-DEPTH KUBERNETES CLUSTER HEALTH CHECK ---
+    step_counter=$((step_counter + 1)); log_step $step_counter "Cluster Health Verification"
+    log_info "Configuring local kubeconfig..."
+    mkdir -p "$(dirname "${KUBECONFIG_PATH}")"
+    local raw_kubeconfig; raw_kubeconfig=$(cat /etc/rancher/k3s/k3s.yaml)
+    echo "${raw_kubeconfig}" | sed "s/127.0.0.1/${API_SERVER_FQDN}/" | sed "s/default/personal-cluster/" > "${KUBECONFIG_PATH}"
+    chmod 600 "${KUBECONFIG_PATH}"; export KUBECONFIG="${KUBECONFIG_PATH}"
+    log_success "Local kubeconfig configured."
+    log_info "[Health Check 1/3] Waiting for API server..."
+    kubectl version --request-timeout=30s
+    log_success "API server is responsive."
+    log_info "[Health Check 2/3] Verifying node is Ready and Schedulable..."
+    local node_attempts=0; local max_node_attempts=12
+    until kubectl get nodes --no-headers=true 2>/dev/null | grep -q "."; do
+        node_attempts=$((node_attempts + 1))
+        if [ "${node_attempts}" -gt "${max_node_attempts}" ]; then log_error_and_exit "Timed out waiting for Node resource."; fi
+        log_info "Node not found, retrying... (${node_attempts}/${max_node_attempts})"; sleep 5
+    done
+    kubectl wait --for=condition=Ready node --all --timeout=5m
+    local node_name; node_name=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+    if kubectl get node "${node_name}" -o jsonpath='{.spec.taints[?(@.effect=="NoSchedule")]}' | grep -q "NoSchedule"; then
+        log_error_and_exit "Node '${node_name}' has a 'NoSchedule' taint."
+    fi
+    log_success "Node is Ready and Schedulable."
+    log_info "[Health Check 3/3] Verifying critical addons..."
     kubectl wait --for=condition=Available deployment/coredns -n kube-system --timeout=5m
-    echo "--> SUCCESS: Cluster is healthy and kubeconfig is set up."
+    kubectl wait --for=condition=Available deployment/local-path-provisioner -n kube-system --timeout=5m
+    log_success "Cluster core components are fully operational."
 
-    log_step $step_counter "GitOps Bootstrap (ArgoCD)"; ((step_counter++))
-    echo "--> Installing ArgoCD via Helm..."
-    helm repo add argo https://argoproj.github.io/argo-helm &>/dev/null || true
-    helm repo update > /dev/null
-    helm upgrade --install argocd argo/argo-cd --version "${ARGOCD_CHART_VERSION}" \
-        -n "${ARGOCD_NS}" --create-namespace \
-        --set server.service.type=ClusterIP \
-        --wait --timeout=15m
-
-    echo "--> Applying root Application to bootstrap GitOps..."
+    # --- PHASE 5: GITOPS BOOTSTRAP & APPLICATION DEPLOYMENT ---
+    step_counter=$((step_counter + 1)); log_step $step_counter "GitOps Bootstrap (ArgoCD)"
+    log_info "Installing ArgoCD via Helm..."
+    helm repo add argo https://argoproj.github.io/argo-helm &>/dev/null || helm repo update
+    helm upgrade --install argocd argo/argo-cd --version "${ARGOCD_CHART_VERSION}" -n argocd --create-namespace --set server.service.type=ClusterIP --wait --timeout=15m
+    log_success "ArgoCD Helm chart installed."
+    log_info "Applying root Application..."
+    # Note: ArgoCD CLI is not a prerequisite for the script, so we use kubectl
+    if ! command -v argocd &> /dev/null; then
+        log_info "argocd CLI not found. You may want to install it for easier debugging."
+    fi
     kubectl apply -f kubernetes/bootstrap/root.yaml
-    echo "--> SUCCESS: ArgoCD is installed and managing the cluster."
-    
-    log_step $step_counter "Final End-to-End Verification"; ((step_counter++))
-    echo "--> 1/5: Waiting for all ArgoCD applications to become Healthy & Synced..."
-    kubectl wait --for=jsonpath='{.status.health.status}'=Healthy application --all -n ${ARGOCD_NS} --timeout=15m
-    kubectl wait --for=jsonpath='{.status.sync.status}'=Synced application --all -n ${ARGOCD_NS} --timeout=15m
-    echo "--> SUCCESS: All applications are Healthy and Synced."
+    log_success "Root ArgoCD Application applied."
 
-    echo "--> 2/5: Waiting for Traefik DaemonSet to be ready..."
-    kubectl rollout status daemonset/traefik -n ${TRAEFIK_NS} --timeout=5m
-    echo "--> SUCCESS: Traefik DaemonSet is ready."
-
-    echo "--> 3/5: Verifying Traefik is listening on host ports..."
-    ${SSH_CMD} "${SSH_USER}@${VPS_IP}" "ss -tlpn | grep -E ':(80|443)'"
-    echo "--> SUCCESS: Traefik is listening on host ports 80 & 443."
-
-    echo "--> 4/5: Verifying ClusterIssuer is ready..."
+    # --- FINAL VERIFICATION ---
+    step_counter=$((step_counter + 1)); log_step $step_counter "Final End-to-End Verification"
+    log_info "Waiting for all ArgoCD-managed applications to become Healthy & Synced..."
+    kubectl wait --for=jsonpath='{.status.health.status}'=Healthy application --all -n argocd --timeout=15m
+    kubectl wait --for=jsonpath='{.status.sync.status}'=Synced application --all -n argocd --timeout=15m
+    log_success "All ArgoCD applications are Healthy and Synced."
+    # ... The rest of the verification steps ...
+    log_info "Verifying Traefik is running and listening on host ports..."
+    kubectl rollout status daemonset/traefik -n traefik --timeout=5m
+    if ! ss -tlpn | grep -q ':443'; then log_error_and_exit "Traefik is not listening on host port 443."; fi
+    log_success "Traefik is running and listening on host ports."
+    log_info "Verifying ClusterIssuer is ready..."
     kubectl wait --for=condition=Ready clusterissuer/cloudflare-staging --timeout=2m
-    echo "--> SUCCESS: ClusterIssuer is ready."
+    log_success "ClusterIssuer 'cloudflare-staging' is Ready."
+    log_info "Verifying ArgoCD Ingress certificate has been issued..."
+    kubectl wait --for=condition=Ready certificate/argocd-server-tls-staging -n argocd --timeout=5m
+    log_success "Certificate for ArgoCD has been successfully issued."
 
-    echo "--> 5/5: Verifying ArgoCD Ingress certificate is issued..."
-    kubectl wait --for=condition=Ready certificate/argocd-server-tls-staging -n ${ARGOCD_NS} --timeout=5m
-    echo "--> SUCCESS: Certificate for ArgoCD has been issued."
-
-    ARGOCD_PASSWORD=$(kubectl -n ${ARGOCD_NS} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
-
-    trap - EXIT
-    echo -e "\n\n\033[1;32m##############################################################################\033[0m"
-    echo -e "\033[1;32m#          ✅ DEPLOYMENT COMPLETED SUCCESSFULLY ✅                         #\033[0m"
-    echo -e "\033[1;32m##############################################################################\033[0m"
-    
-    echo -e "\nYour personal cluster is ready and GitOps is running."
-    echo -e "\n\033[1;33mArgoCD Login Details:\033[0m"
-    echo -e "Access UI: \033[1;36mhttps://${ARGOCD_FQDN}\033[0m (accept the staging certificate)"
-    echo -e "Username:  \033[1;36m${ARGOCD_ADMIN_USER}\033[0m"
-    echo -e "Password:  \033[1;36m${ARGOCD_PASSWORD}\033[0m"
+    # --- DEPLOYMENT COMPLETE ---
+    trap - ERR
+    local argocd_password; argocd_password=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+    echo -e "\n\n\033[1;32m##############################################################################\033[0m"; echo -e "\033[1;32m#          ✅ DEPLOYMENT COMPLETED SUCCESSFULLY ✅                         #\033[0m"; echo -e "\033[1;32m##############################################################################\033[0m"
+    echo -e "\nYour personal cluster is ready and managed by ArgoCD."; echo -e "\n\033[1;33mArgoCD Access Details:\033[0m"; echo -e "  UI:      \033[1;36mhttps://${ARGOCD_FQDN}\033[0m (accept the staging certificate)"; echo -e "  User:    \033[1;36m${ARGOCD_ADMIN_USER}\033[0m"; echo -e "  Password:\033[1;36m ${argocd_password}\033[0m"
+    echo -e "\nTo log in via CLI:"; echo -e "  \033[0;35margocd login ${ARGOCD_FQDN} --username ${ARGOCD_ADMIN_USER} --password '${argocd_password}' --insecure\033[0m"
 }
-
 main "$@"

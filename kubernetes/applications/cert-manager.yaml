@@ -11,7 +11,7 @@ spec:
   source:
     repoURL: https://charts.jetstack.io
     chart: cert-manager
-    targetRevision: v1.18.2 # As per your version spec
+    targetRevision: v1.18.2
     helm:
       releaseName: cert-manager
       values: |
@@ -31,41 +31,3 @@ spec:
       selfHeal: true
     syncOptions:
     - CreateNamespace=true
-    # REFACTOR: Remove incorrect 'syncWindows' and add robust 'PostSync' hook.
-    # This hook ensures that the entire Application is not considered 'Synced' until
-    # the cert-manager webhook is verified as ready by its own startupapicheck Job.
-    hooks:
-    - name: wait-for-startup-check
-      # This hook runs AFTER all resources from the cert-manager chart are applied.
-      hookType: PostSync
-      # This Job will be deleted automatically once it completes successfully.
-      deletePolicy: HookSucceeded
-      # The Job manifest itself.
-      manifest: |
-        apiVersion: batch/v1
-        kind: Job
-        metadata:
-          generateName: wait-for-cm-startup-
-          namespace: cert-manager
-          annotations:
-            # This annotation tells Argo CD to treat this as a hook, not a regular resource.
-            argocd.argoproj.io/hook: PostSync
-            argocd.argoproj.io/hook-delete-policy: HookSucceeded
-        spec:
-          template:
-            spec:
-              containers:
-              - name: checker
-                image: bitnami/kubectl:latest # A lightweight image with kubectl
-                command:
-                  - /bin/sh
-                  - -c
-                  - |
-                    echo "Waiting for cert-manager-startupapicheck job to complete...";
-                    # This command will wait until the 'startupapicheck' job has a condition of 'Complete'.
-                    # It will timeout after 5 minutes, failing the sync if the check doesn't succeed.
-                    kubectl wait --for=condition=complete job -l 'app.kubernetes.io/instance=cert-manager,app.kubernetes.io/component=startupapicheck' -n cert-manager --timeout=5m;
-                    echo "Cert-manager webhook is ready.";
-              restartPolicy: Never
-              serviceAccountName: default # Uses default SA in the namespace
-          backoffLimit: 1
