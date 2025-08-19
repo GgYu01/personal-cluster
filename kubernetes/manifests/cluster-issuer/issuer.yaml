@@ -15,7 +15,11 @@ spec:
           email: 1405630484@qq.com
           apiTokenSecretRef:
             name: cloudflare-api-token-secret
-            # BEST PRACTICE: Explicitly define the namespace where the secret resides.
-            # This is crucial for ClusterIssuers.
-            namespace: cert-manager
+            # --- [START OF CORRECTION] ---
+            # The 'namespace' field is invalid within this spec for a ClusterIssuer.
+            # cert-manager's controller is configured to look for this secret
+            # in its own installation namespace ('cert-manager' in our case),
+            # which is the correct and expected behavior.
+            # namespace: cert-manager # This line is removed.
+            # --- [END OF CORRECTION] ---
             key: api-token
