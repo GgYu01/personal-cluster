@@ -1,76 +1,53 @@
 #!/usr/bin/env bash
 
-# ==============================================================================
-#
-#           ARGO CD DEEP DIVE DIAGNOSTIC SCRIPT
-#
-# ==============================================================================
-#
-#   PURPOSE: To be executed after a GitOps deployment failure to collect
-#   detailed state information from ArgoCD and its managed resources.
-#
-# ==============================================================================
 
-set -e
 
-# Helper function for logging sections
-log_section() {
-    echo -e "\n\n\033[1;35m# --- DEBUG SECTION: $1 (Timestamp: $(date -u --iso-8601=seconds)) ---\033[0m"
-}
+echo "--- [STARTING EXPERIMENT A: FULL CONFIG] ---" > /root/k3s_direct_boot.log
 
-log_info() {
-    echo "--> DEBUG: $1"
-}
+# 准备好 K3s 启动参数
+K3S_EXEC_ARGS="server \
+    --cluster-init \
+    --datastore-endpoint=http://127.0.0.1:2379 \
+    --tls-san=api.core01.prod.gglohh.top \
+    --tls-san=172.245.187.113 \
+    --disable=traefik \
+    --disable=servicelb \
+    --disable-cloud-controller \
+    --flannel-iface=eth0 \
+    --selinux=false \
+    --kubelet-arg=fail-swap-on=false \
+    --admission-control-config-file=/etc/rancher/k3s/admission-config-full.yaml"
 
-# --- Start Diagnostics ---
-log_info "Starting ArgoCD deep dive diagnostics..."
-export KUBECONFIG="${HOME}/.kube/config"
+# 直接执行 K3s 并将所有输出（标准输出和标准错误）追加到日志文件
+# 我们预计这可能会失败
+/usr/local/bin/k3s $K3S_EXEC_ARGS >> /root/k3s_direct_boot.log 2>&1 || true
 
-# --- Section 1: ArgoCD Application Overview ---
-log_section "ArgoCD Application Tree & Status"
-log_info "Getting all Applications in 'argocd' namespace (wide view)..."
-kubectl get applications -n argocd -o wide
-log_info "Getting all Applications in 'argocd' namespace (YAML view for full status)..."
-kubectl get applications -n argocd -o yaml
+echo "--- [FINISHED EXPERIMENT A] ---" >> /root/k3s_direct_boot.log
 
-# --- Section 2: Individual Application Sync Status & Events ---
-log_section "Individual Application Details"
-for app in $(kubectl get applications -n argocd -o jsonpath='{.items[*].metadata.name}'); do
-    log_info "Describing Application: ${app}"
-    kubectl describe application "${app}" -n argocd
-    log_info "Getting sync status for Application: ${app}"
-    # Using argocd CLI if available, otherwise skipping
-    if command -v argocd &> /dev/null; then
-        # Assuming already logged in or have context configured
-        argocd app get "${app}" --show-operation || echo "argocd CLI command failed for ${app}, continuing..."
-    else
-        log_info "argocd CLI not found, skipping 'argocd app get'."
-    fi
-done
+# 等待几秒确保进程有时间退出
+sleep 5
+/usr/local/bin/k3s-killall.sh || true # 再次清理
 
-# --- Section 3: Logs from ArgoCD Controller Pods ---
-log_section "ArgoCD Controller Logs"
-log_info "Fetching logs from 'argocd-application-controller'..."
-kubectl logs -n argocd -l app.kubernetes.io/name=argocd-application-controller --tail=200
-log_info "Fetching logs from 'argocd-repo-server'..."
-kubectl logs -n argocd -l app.kubernetes.io/name=argocd-repo-server --tail=200
 
-# --- Section 4: Status of Managed Resources (Cert-Manager & Traefik) ---
-log_section "Status of Key Managed Components"
 
-log_info "Checking resources in 'cert-manager' namespace..."
-kubectl get all,issuers,clusterissuers,certificates,certificaterequests,orders,challenges -n cert-manager -o wide || echo "Could not get resources from cert-manager namespace."
-log_info "Describing all pods in 'cert-manager' namespace..."
-kubectl describe pods -n cert-manager || echo "Could not describe pods in cert-manager namespace."
 
-log_info "Checking resources in 'traefik' namespace..."
-kubectl get all,ingressroutes,middlewares -n traefik -o wide || echo "Could not get resources from traefik namespace."
-log_info "Describing all pods in 'traefik' namespace..."
-kubectl describe pods -n traefik || echo "Could not describe pods in traefik namespace."
+echo "--- [STARTING EXPERIMENT B: MINIMAL CONFIG] ---" >> /root/k3s_direct_boot.log
 
-# --- Section 5: Cluster-wide Events ---
-log_section "Recent Cluster-wide Events"
-log_info "Fetching last 50 events across all namespaces, sorted by time..."
-kubectl get events -A --sort-by='.lastTimestamp' | tail -n 50
+# 更新启动参数，指向极简配置文件
+K3S_EXEC_ARGS="server \
+    --cluster-init \
+    --datastore-endpoint=http://127.0.0.1:2379 \
+    --tls-san=api.core01.prod.gglohh.top \
+    --tls-san=172.245.187.113 \
+    --disable=traefik \
+    --disable=servicelb \
+    --disable-cloud-controller \
+    --flannel-iface=eth0 \
+    --selinux=false \
+    --kubelet-arg=fail-swap-on=false \
+    --admission-control-config-file=/etc/rancher/k3s/admission-config-minimal.yaml"
 
-log_info "ArgoCD deep dive diagnostics complete."
+# 再次尝试直接执行
+/usr/local/bin/k3s $K3S_EXEC_ARGS >> /root/k3s_direct_boot.log 2>&1 || true
+
+echo "--- [FINISHED EXPERIMENT B] ---" >> /root/k3s_direct_boot.log
