@@ -6,13 +6,8 @@ metadata:
   namespace: argocd
   finalizers:
   - resources-finalizer.argocd.argoproj.io
-  # --- [START OF CORRECTION] ---
-  # Add an annotation to inform Argo CD to adopt existing resources if they are
-  # managed by Helm but now being managed by this Application.
-  # This helps in the transition from Helm bootstrap to GitOps management.
   annotations:
     argocd.argoproj.io/sync-options: "Replace=true"
-  # --- [END OF CORRECTION] ---
 spec:
   project: default
   source:
@@ -23,45 +18,40 @@ spec:
       releaseName: argocd
       values: |
         # ======================================================================
-        # CORE FIX: Argo CD Server Configuration
+        # CORE CONFIGURATION
+        # ======================================================================
+        configs:
+          # --- [START OF PASSWORD FIX] ---
+          # This section provides a static, bcrypt-hashed password for the 'admin' user,
+          # based on the official values.yaml documentation for chart version 8.2.7.
+          # The password is 'password'.
+          # The hash was generated using the command recommended in the official docs:
+          # htpasswd -nbBC 10 "" "password" | tr -d ':\n' | sed 's/$2y/$2a/'
+          secret:
+            createSecret: true
+            argocdServerAdminPassword: "$2a$10$Xx3c/ILSzwZfp2wHhoPxFOwH4yFp3MepBtoZpR2JgTsPaG6dz1EYS"
+            argocdServerAdminPasswordMtime: "2024-01-01T00:00:00Z"
+          # --- [END OF PASSWORD FIX] ---
+
+        # ======================================================================
+        # ARGO CD SERVER CONFIGURATION
         # ======================================================================
         server:
-          # --- [START OF FIX] ---
-          # This is the definitive fix for the port-forwarding and ingress
-          # connectivity issue. By adding the '--insecure' flag, we instruct
-          # the argocd-server to listen on all network interfaces (0.0.0.0)
-          # via HTTP on its container port (8080).
-          #
-          # Rationale:
-          # 1. Accessibility: The default behavior is to listen only on
-          #    localhost (127.0.0.1), which makes it inaccessible from
-          #    outside the pod, including from Traefik.
-          # 2. TLS Termination: We are offloading TLS termination to Traefik,
-          #    which is the standard and recommended practice. Traefik will
-          #    handle the HTTPS connection from the client, and communicate
-          #    with argocd-server internally via plain HTTP. This is secure
-          #    within the cluster's private network.
-          # 3. Simplicity: This approach avoids complex TLS configurations
-          #    within Argo CD itself and aligns with your requirement for
-          #    a simplified, unencrypted internal environment.
+          # This flag ensures the argocd-server listens on all interfaces (0.0.0.0)
+          # via HTTP, making it accessible to the Traefik Ingress controller.
           extraArgs:
             - --insecure
-          # --- [END OF FIX] ---
-
-          # We define the service as ClusterIP, as it will be exposed via
-          # Traefik IngressRoute, not directly.
           service:
             type: ClusterIP
 
         # ======================================================================
-        # Component-Specific Settings
+        # COMPONENT-SPECIFIC SETTINGS
         # ======================================================================
         # Disable HA for a lightweight single-node setup
         ha:
           enabled: false
 
         # Disable ApplicationSet controller if not used, to save resources.
-        # Set to `true` if you plan to use ApplicationSet resources.
         applicationSet:
           enabled: false
 
