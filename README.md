@@ -1,5 +1,5 @@
-tree -L 3  >  /root/log.log  2>&1
-tail -n +1 01-infra/*.tf  kubernetes/applications/*.yaml  kubernetes/manifests/argocd-ingress/*.yaml kubernetes/manifests/cluster-issuer/*.yaml   deploy.sh  temp.sh  collect_k3s_diagnostics.sh  >>  /root/log.log  2>&1
+tree  >  /root/log.log  2>&1
+tail -n +1   kubernetes/applications/*.yaml  kubernetes/manifests/argocd-ingress/*.yaml kubernetes/manifests/cluster-issuer/*.yaml ./deploy.sh  *.log >>  /root/log.log  2>&1
 
 
 由于你你现在数据库严重滞后，请不要直接回答，而是告诉我如何提供给你你现在有可能用到所有部分的官方文档信息或者日志、debug、错误信息，并且告诉我如何找到对应文档或者本地存储的信息、辅助调试的信息，请务必保证代码和方案与设计的质量，不要直接尝试解决问题，也不要给出任何解决的方案，一定要等我把文档和本地调试、日志、抓取的信息发给你后才可以开始做设计或者是代码编写。不要盲目信任你的记忆信息，而是任何时候以我提供给你的官方最新文档为准。
@@ -34,4 +34,80 @@ argo cd chart 是 8.2.7
 对于部署脚本中的检测方式，要满足验证充分完全的情况下，反复确认深度思考脚本中检测的逻辑是否真的正确，是否符合我很多特殊要求的情况，不要因为错误的检测思路、方法导致系统部署正常的情况下脚本中途意外退出。
 关于脚本中的日志，要保证能全方位多角度获取尽可能全面的日志内容，多方面辅助debug检查流程。但是要想办法，比如禁止restart或者其他方案，防止因为反复重启输出大量无效日志，日志不要有过多重复。
 
-我当前源码和日志如下，执行部署脚本时存在重大问题：
+以下是K3S官网最新文档目录，你需要什么内容可以告诉我，我会提供对应章节的文档
+K3s - Lightweight Kubernetes
+Quick-Start Guide
+Installation
+
+Requirements
+Configuration Options
+Private Registry Configuration
+Embedded Registry Mirror
+Air-Gap Install
+Managing Server Roles
+Managing Packaged Components
+Uninstalling K3s
+Cluster Datastore
+
+Backup and Restore
+High Availability Embedded etcd
+High Availability External DB
+Cluster Load Balancer
+Upgrades
+
+Stopping K3s
+Manual Upgrades
+Automated Upgrades
+Rolling Back K3s
+Security
+
+Secrets Encryption
+CIS Hardening Guide
+CIS 1.9 Self Assessment Guide
+CIS 1.8 Self Assessment Guide
+CIS 1.7 Self Assessment Guide
+CLI Tools
+
+server
+agent
+certificate
+etcd-snapshot
+secrets-encrypt
+token
+Architecture
+Cluster Access
+Volumes and Storage
+Import Images
+Networking
+
+Basic Network Options
+Distributed hybrid or multicloud cluster
+Multus and IPAM plugins
+Networking Services
+Helm
+Advanced Options / Configuration
+Reference
+Environment Variables
+Flag Deprecation
+Metrics
+Resource Profiling
+Release Notes
+v1.33.X
+v1.32.X
+v1.31.X
+v1.30.X
+v1.29.X
+Older...
+v1.28.X
+v1.27.X
+v1.26.X
+v1.25.X
+v1.24.X
+Related Projects
+Known Issues
+FAQ
+
+
+我当前源码和日志如下，执行部署脚本时存在重大问题，请你提供需要的最新官方文档后综合诊断：
+
+

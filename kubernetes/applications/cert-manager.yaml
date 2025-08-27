@@ -11,11 +11,17 @@ spec:
   source:
     repoURL: https://charts.jetstack.io
     chart: cert-manager
-    targetRevision: v1.18.2
+    targetRevision: v1.18.2 # This is the application version. The chart version will be resolved by Helm.
     helm:
       releaseName: cert-manager
       values: |
-        installCRDs: true # For older chart versions compatibility, this is a reliable way to ensure CRDs are installed.
+        # --- [START OF CORRECTION] ---
+        # According to the provided official Helm chart documentation, 'installCRDs' is deprecated.
+        # The modern and correct way to ensure CRDs are managed by the Helm chart is using 'crds.enabled'.
+        crds:
+          enabled: true
+        # --- [END OF CORRECTION] ---
+        
         startupapicheck:
           enabled: true
           # Give it ample time to succeed, especially on slower networks or busy nodes.
