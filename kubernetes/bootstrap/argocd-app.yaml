@@ -6,6 +6,13 @@ metadata:
   namespace: argocd
   finalizers:
   - resources-finalizer.argocd.argoproj.io
+  # --- [START OF CORRECTION] ---
+  # Add an annotation to inform Argo CD to adopt existing resources if they are
+  # managed by Helm but now being managed by this Application.
+  # This helps in the transition from Helm bootstrap to GitOps management.
+  annotations:
+    argocd.argoproj.io/sync-options: "Replace=true"
+  # --- [END OF CORRECTION] ---
 spec:
   project: default
   source:
