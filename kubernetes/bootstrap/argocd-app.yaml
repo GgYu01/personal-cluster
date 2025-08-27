@@ -1,0 +1,78 @@
+# kubernetes/bootstrap/argocd-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-cd
+    targetRevision: 8.2.7 # Chart Version
+    helm:
+      releaseName: argocd
+      values: |
+        # ======================================================================
+        # CORE FIX: Argo CD Server Configuration
+        # ======================================================================
+        server:
+          # --- [START OF FIX] ---
+          # This is the definitive fix for the port-forwarding and ingress
+          # connectivity issue. By adding the '--insecure' flag, we instruct
+          # the argocd-server to listen on all network interfaces (0.0.0.0)
+          # via HTTP on its container port (8080).
+          #
+          # Rationale:
+          # 1. Accessibility: The default behavior is to listen only on
+          #    localhost (127.0.0.1), which makes it inaccessible from
+          #    outside the pod, including from Traefik.
+          # 2. TLS Termination: We are offloading TLS termination to Traefik,
+          #    which is the standard and recommended practice. Traefik will
+          #    handle the HTTPS connection from the client, and communicate
+          #    with argocd-server internally via plain HTTP. This is secure
+          #    within the cluster's private network.
+          # 3. Simplicity: This approach avoids complex TLS configurations
+          #    within Argo CD itself and aligns with your requirement for
+          #    a simplified, unencrypted internal environment.
+          extraArgs:
+            - --insecure
+          # --- [END OF FIX] ---
+
+          # We define the service as ClusterIP, as it will be exposed via
+          # Traefik IngressRoute, not directly.
+          service:
+            type: ClusterIP
+
+        # ======================================================================
+        # Component-Specific Settings
+        # ======================================================================
+        # Disable HA for a lightweight single-node setup
+        ha:
+          enabled: false
+
+        # Disable ApplicationSet controller if not used, to save resources.
+        # Set to `true` if you plan to use ApplicationSet resources.
+        applicationSet:
+          enabled: false
+
+        # Disable Notifications controller if not used.
+        notifications:
+          enabled: false
+
+        # Configure Redis for a non-HA setup.
+        redis:
+          enabled: true
+        redis-ha:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
