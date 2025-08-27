@@ -1,0 +1,19 @@
+# kubernetes/manifests/argocd-ingress/certificate.yaml
+# This resource explicitly instructs cert-manager to obtain a certificate.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: argocd-server-tls-staging
+  namespace: argocd
+spec:
+  # This secretName must match the one in the IngressRoute's tls block.
+  secretName: argocd-server-tls-staging
+  
+  # References the ClusterIssuer you created.
+  issuerRef:
+    name: cloudflare-staging
+    kind: ClusterIssuer
+  
+  # Defines the domain for the certificate.
+  dnsNames:
+  - argocd.core01.prod.gglohh.top
