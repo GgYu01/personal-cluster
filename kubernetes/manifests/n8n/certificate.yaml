@@ -1,0 +1,13 @@
+# kubernetes/manifests/n8n/certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: n8n-tls-staging
+  namespace: n8n # MUST be in the same namespace as the Ingress
+spec:
+  secretName: n8n-tls-staging # This name is referenced by the Ingress created by the Helm chart
+  issuerRef:
+    name: cloudflare-staging
+    kind: ClusterIssuer
+  dnsNames:
+  - n8n.core01.prod.gglohh.top

@@ -1,0 +1,112 @@
+# kubernetes/apps/n8n-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: n8n
+  namespace: argocd
+  annotations:
+    # Deploys after core infrastructure like cert-manager and traefik
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  project: default
+  source:
+    # Correct repository and version as specified by you
+    repoURL: https://community-charts.github.io/helm-charts
+    chart: n8n
+    targetRevision: 1.15.4
+    helm:
+      releaseName: n8n
+      values: |
+        # ======================================================================
+        # n8n Core Configuration
+        # ======================================================================
+        # Based on your request for an insecure setup, we use a simple, hardcoded key.
+        encryptionKey: "a-very-insecure-but-static-encryption-key-for-n8n"
+
+        # Setting timezone is crucial for scheduled workflows (Cron node)
+        timezone: "Asia/Shanghai"
+
+        # Configure persistence for the main n8n pod.
+        # This volume stores critical data like the encryption key file, SQLite (if used), etc.
+        main:
+          persistence:
+            enabled: true
+            storageClass: "local-path" # Use the default storage class in your cluster
+            size: 5Gi
+
+        # Configure binary data to be stored on the filesystem (the PVC above), not in memory.
+        binaryData:
+          mode: "filesystem"
+
+        # ======================================================================
+        # Execution Mode: Queue
+        # Enable queue mode for better scalability, using the Redis subchart.
+        # ======================================================================
+        worker:
+          mode: queue
+          # Let's start with one worker for this single-node setup
+          count: 1
+
+        # ======================================================================
+        # Database Configuration: Use sub-chart for PostgreSQL
+        # ======================================================================
+        db:
+          type: postgresdb # IMPORTANT: This tells n8n to use postgres.
+
+        # This enables and configures the Bitnami PostgreSQL sub-chart
+        postgresql:
+          enabled: true
+          architecture: standalone # Optimal for a single-node cluster
+          auth:
+            database: "n8n"
+            username: "admin"
+            password: "password" # Hardcoded simple password as requested
+          primary:
+            persistence:
+              enabled: true
+              storageClass: "local-path" # Use the default storage class
+              size: 8Gi
+
+        # ======================================================================
+        # Queue/Cache Configuration: Use sub-chart for Redis
+        # ======================================================================
+        # This enables and configures the Bitnami Redis sub-chart for the execution queue
+        redis:
+          enabled: true
+          architecture: standalone # Optimal for a single-node, non-HA setup
+          auth:
+            enabled: true
+            password: "password" # Hardcoded simple password as requested
+          master:
+            persistence:
+              enabled: true
+              storageClass: "local-path"
+              size: 2Gi
+
+        # ======================================================================
+        # Ingress Configuration (for Traefik)
+        # ======================================================================
+        ingress:
+          enabled: true
+          # This must match the name of your Traefik IngressClass
+          className: "traefik"
+          hosts:
+            - host: n8n.core01.prod.gglohh.top
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: n8n-tls-staging # This secret will be created by Cert-Manager
+              hosts:
+                - n8n.core01.prod.gglohh.top
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: n8n # Deploy all n8n components into this namespace
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
