@@ -13,7 +13,7 @@ spec:
   source:
     repoURL: https://argoproj.github.io/argo-helm
     chart: argo-cd
-    targetRevision: 8.2.7 # Chart Version
+    targetRevision: 8.2.7
     helm:
       releaseName: argocd
       values: |
@@ -21,17 +21,38 @@ spec:
         # CORE CONFIGURATION
         # ======================================================================
         configs:
-          # --- [START OF RBAC FIX] ---
-          # Explicitly define the rbac block to ensure default policies are created.
-          # We are providing an empty 'policy' string, which tells the Helm chart
-          # to use its built-in, comprehensive default policy, rather than an empty one.
+          # --- RBAC（关键修复）---
+          # 注意：helm chart 的键是 policy 和 policyDefault（不是 policy.csv）
           rbac:
             create: true
-            policy: "" 
-          # --- [END OF RBAC FIX] ---
+            policy: |
+              p, role:readonly, applications, get, */*, allow
+              p, role:readonly, applications, subscribe, */*, allow
+              p, role:readonly, certificates, get, *, allow
+              p, role:readonly, clusters, get, *, allow
+              p, role:readonly, repositories, get, *, allow
+              p, role:readonly, projects, get, *, allow
+              p, role:readonly, accounts, get, *, allow
+              p, role:readonly, gpgkeys, get, *, allow
+
+              p, role:admin, applications, *, */*, allow
+              p, role:admin, applicationsets, *, */*, allow
+              p, role:admin, certificates, *, *, allow
+              p, role:admin, clusters, *, *, allow
+              p, role:admin, repositories, *, *, allow
+              p, role:admin, projects, *, *, allow
+              p, role:admin, accounts, *, *, allow
+              p, role:admin, gpgkeys, *, *, allow
+              p, role:admin, exec, *, *, allow
+
+              g, admin, role:admin
+            policyDefault: ""
+            scopes: '[email, groups]'
+          # -----------------------
 
           secret:
             createSecret: true
+            # admin 密码：password
             argocdServerAdminPassword: "$2a$10$Xx3c/ILSzwZfp2wHhoPxFOwH4yFp3MepBtoZpR2JgTsPaG6dz1EYS"
             argocdServerAdminPasswordMtime: "2024-01-01T00:00:00Z"
 
