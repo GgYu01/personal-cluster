@@ -5,6 +5,7 @@ metadata:
   name: n8n
   namespace: argocd
   annotations:
+    # 托管顺序可保留
     argocd.argoproj.io/sync-wave: "10"
 spec:
   project: default
@@ -21,7 +22,7 @@ spec:
         encryptionKey: "a-very-insecure-but-static-encryption-key-for-n8n"
         timezone: "Asia/Shanghai"
 
-        # 主容器设置（注意：此 chart 版本不支持 startupProbe / extraEnv）
+        # 主容器设置（注意：此 chart 版本不支持 startupProbe/extraEnv）
         main:
           resources:
             requests:
@@ -31,7 +32,6 @@ spec:
               cpu: 500m
               memory: 512Mi
 
-          # 该 chart 支持 livenessProbe/readinessProbe
           livenessProbe:
             enabled: true
             httpGet:
@@ -52,18 +52,13 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 12
 
-          # 环境变量扩展：使用 extraEnvVars（而不是 extraEnv）
+          # 关键修复：使用 map 形式的 extraEnvVars（而不是数组）
           extraEnvVars:
-            - name: N8N_HOST
-              value: n8n.core01.prod.gglohh.top
-            - name: N8N_SECURE_COOKIE
-              value: "false"
-            - name: N8N_PROTOCOL
-              value: https
-            - name: N8N_PORT
-              value: "5678"
-            - name: WEBHOOK_URL
-              value: https://n8n.core01.prod.gglohh.top/
+            N8N_HOST: n8n.core01.prod.gglohh.top
+            N8N_SECURE_COOKIE: "false"      # 你要求的禁用安全 Cookie 配置
+            N8N_PROTOCOL: https
+            N8N_PORT: "5678"
+            WEBHOOK_URL: https://n8n.core01.prod.gglohh.top/
 
         # 二进制数据本地持久化
         binaryData:
