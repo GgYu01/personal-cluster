@@ -5,12 +5,10 @@ metadata:
   name: n8n
   namespace: argocd
   annotations:
-    # Deploys after core infrastructure like cert-manager and traefik
     argocd.argoproj.io/sync-wave: "10"
 spec:
   project: default
   source:
-    # Correct repository and version as specified by you
     repoURL: https://community-charts.github.io/helm-charts
     chart: n8n
     targetRevision: 1.15.4
@@ -20,14 +18,10 @@ spec:
         # ======================================================================
         # n8n Core Configuration
         # ======================================================================
-        # Based on your request for an insecure setup, we use a simple, hardcoded key.
         encryptionKey: "a-very-insecure-but-static-encryption-key-for-n8n"
-
-        # Setting timezone is crucial for scheduled workflows (Cron node)
         timezone: "Asia/Shanghai"
 
-        # Configure persistence for the main n8n pod.
-        # This volume stores critical data like the encryption key file, SQLite (if used), etc.
+        # 主容器设置（注意：此 chart 版本不支持 startupProbe / extraEnv）
         main:
           resources:
             requests:
@@ -37,16 +31,7 @@ spec:
               cpu: 500m
               memory: 512Mi
 
-          startupProbe:
-            enabled: true
-            httpGet:
-              path: /healthz
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 60
-
+          # 该 chart 支持 livenessProbe/readinessProbe
           livenessProbe:
             enabled: true
             httpGet:
@@ -67,7 +52,8 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 12
 
-          extraEnv:
+          # 环境变量扩展：使用 extraEnvVars（而不是 extraEnv）
+          extraEnvVars:
             - name: N8N_HOST
               value: n8n.core01.prod.gglohh.top
             - name: N8N_SECURE_COOKIE
@@ -79,61 +65,48 @@ spec:
             - name: WEBHOOK_URL
               value: https://n8n.core01.prod.gglohh.top/
 
-        # Configure binary data to be stored on the filesystem (the PVC above), not in memory.
+        # 二进制数据本地持久化
         binaryData:
           mode: "filesystem"
 
-        # ======================================================================
-        # Execution Mode: Queue
-        # Enable queue mode for better scalability, using the Redis subchart.
-        # ======================================================================
+        # 执行模式：队列 + 1 个 worker
         worker:
           mode: queue
-          # Let's start with one worker for this single-node setup
           count: 1
 
-        # ======================================================================
-        # Database Configuration: Use sub-chart for PostgreSQL
-        # ======================================================================
+        # 数据库：PostgreSQL 子图表
         db:
-          type: postgresdb # IMPORTANT: This tells n8n to use postgres.
+          type: postgresdb
 
-        # This enables and configures the Bitnami PostgreSQL sub-chart
         postgresql:
           enabled: true
-          architecture: standalone # Optimal for a single-node cluster
+          architecture: standalone
           auth:
             database: "n8n"
             username: "admin"
-            password: "password" # Hardcoded simple password as requested
+            password: "password"
           primary:
             persistence:
               enabled: true
-              storageClass: "local-path" # Use the default storage class
+              storageClass: "local-path"
               size: 8Gi
 
-        # ======================================================================
-        # Queue/Cache Configuration: Use sub-chart for Redis
-        # ======================================================================
-        # This enables and configures the Bitnami Redis sub-chart for the execution queue
+        # 队列：Redis 子图表
         redis:
           enabled: true
-          architecture: standalone # Optimal for a single-node, non-HA setup
+          architecture: standalone
           auth:
             enabled: true
-            password: "password" # Hardcoded simple password as requested
+            password: "password"
           master:
             persistence:
               enabled: true
               storageClass: "local-path"
               size: 2Gi
 
-        # ======================================================================
-        # Ingress Configuration (for Traefik)
-        # ======================================================================
+        # Ingress（Traefik）
         ingress:
           enabled: true
-          # This must match the name of your Traefik IngressClass
           className: "traefik"
           hosts:
             - host: n8n.core01.prod.gglohh.top
@@ -141,14 +114,13 @@ spec:
                 - path: /
                   pathType: Prefix
           tls:
-            - secretName: n8n-tls-staging # This secret will be created by Cert-Manager
+            - secretName: n8n-tls-staging
               hosts:
                 - n8n.core01.prod.gglohh.top
 
   destination:
     server: https://kubernetes.default.svc
-    namespace: n8n # Deploy all n8n components into this namespace
-
+    namespace: n8n
   syncPolicy:
     automated:
       prune: true
