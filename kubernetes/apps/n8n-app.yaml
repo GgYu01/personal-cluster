@@ -29,6 +29,21 @@ spec:
         # Configure persistence for the main n8n pod.
         # This volume stores critical data like the encryption key file, SQLite (if used), etc.
         main:
+
+          # --- 在此处添加禁用安全 Cookie（关键）---
+          extraEnv:
+            - name: N8N_SECURE_COOKIE
+              value: "false"
+            # 若你已存在其他 extraEnv，例如 HOST/PROTOCOL/PORT/WEBHOOK_URL，也保持在这里
+            # - name: N8N_HOST
+            #   value: n8n.core01.prod.gglohh.top
+            # - name: N8N_PROTOCOL
+            #   value: https
+            # - name: N8N_PORT
+            #   value: "5678"
+            # - name: WEBHOOK_URL
+            #   value: https://n8n.core01.prod.gglohh.top/
+
           resources:
             requests:
               cpu: 10m
@@ -37,7 +52,6 @@ spec:
               cpu: 500m
               memory: 512Mi
 
-          # startupProbe 用来给应用“预热时间”，期间不触发 liveness
           startupProbe:
             enabled: true
             httpGet:
@@ -46,9 +60,8 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 2
-            failureThreshold: 60   # 约 5 分钟容忍预热（5s * 60）
+            failureThreshold: 60
 
-          # livenessProbe：延后首检，并提高容错
           livenessProbe:
             enabled: true
             httpGet:
@@ -59,7 +72,6 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 12
 
-          # readinessProbe：延后首检，避免刚启动就 503
           readinessProbe:
             enabled: true
             httpGet:
@@ -70,7 +82,6 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 12
 
-          # 可选：明确外部访问参数（有助于某些反向代理/URL 计算）
           extraEnv:
             - name: N8N_HOST
               value: n8n.core01.prod.gglohh.top
