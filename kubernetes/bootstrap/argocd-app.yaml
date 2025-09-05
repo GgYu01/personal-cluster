@@ -21,24 +21,24 @@ spec:
         # CORE CONFIGURATION
         # ======================================================================
         configs:
-          # --- [START OF PASSWORD FIX] ---
-          # This section provides a static, bcrypt-hashed password for the 'admin' user,
-          # based on the official values.yaml documentation for chart version 8.2.7.
-          # The password is 'password'.
-          # The hash was generated using the command recommended in the official docs:
-          # htpasswd -nbBC 10 "" "password" | tr -d ':\n' | sed 's/$2y/$2a/'
+          # --- [START OF RBAC FIX] ---
+          # Explicitly define the rbac block to ensure default policies are created.
+          # We are providing an empty 'policy' string, which tells the Helm chart
+          # to use its built-in, comprehensive default policy, rather than an empty one.
+          rbac:
+            create: true
+            policy: "" 
+          # --- [END OF RBAC FIX] ---
+
           secret:
             createSecret: true
             argocdServerAdminPassword: "$2a$10$Xx3c/ILSzwZfp2wHhoPxFOwH4yFp3MepBtoZpR2JgTsPaG6dz1EYS"
             argocdServerAdminPasswordMtime: "2024-01-01T00:00:00Z"
-          # --- [END OF PASSWORD FIX] ---
 
         # ======================================================================
         # ARGO CD SERVER CONFIGURATION
         # ======================================================================
         server:
-          # This flag ensures the argocd-server listens on all interfaces (0.0.0.0)
-          # via HTTP, making it accessible to the Traefik Ingress controller.
           extraArgs:
             - --insecure
           service:
@@ -47,19 +47,12 @@ spec:
         # ======================================================================
         # COMPONENT-SPECIFIC SETTINGS
         # ======================================================================
-        # Disable HA for a lightweight single-node setup
         ha:
           enabled: false
-
-        # Disable ApplicationSet controller if not used, to save resources.
         applicationSet:
           enabled: false
-
-        # Disable Notifications controller if not used.
         notifications:
           enabled: false
-
-        # Configure Redis for a non-HA setup.
         redis:
           enabled: true
         redis-ha:
