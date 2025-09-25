@@ -34,6 +34,7 @@ readonly ARGOCD_ADMIN_PASSWORD="password"
 readonly ACME_EMAIL="1405630484@qq.com"
 readonly CF_API_TOKEN="vi7hkPq4FwD5ttV4dvR_IoNVEJSphydRPcT0LVD-"
 readonly WILDCARD_FQDN="*.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"   # *.core01.prod.gglohh.top
+readonly CF_PROXIED="false"
 
 # --- Software Versions ---
 readonly K3S_VERSION="v1.33.3+k3s1"
@@ -57,6 +58,91 @@ readonly KUBELET_CONFIG_PATH="/etc/rancher/k3s/kubelet.config"
 # This avoids re-calculating it on every run and makes the script's intent clearer.
 readonly ARGOCD_ADMIN_PASSWORD_HASH='$2a$10$Xx3c/ILSzwZfp2wHhoPxFOwH4yFp3MepBtoZpR2JgTsPaG6dz1EYS'
 # --- [END OF PASSWORD FIX] ---
+
+# --- [NEW - SECTION 2.1: Cloudflare DNS Helpers] ---
+# Purpose: Manage wildcard A record state-driven via CF API (idempotent, non-interactive).
+cf_api() {
+  # $1: method, $2: path, $3: data (optional)
+  local method="$1"; local path="$2"; local data="${3:-}"
+  if [[ -n "$data" ]]; then
+    curl -sS -X "${method}" "https://api.cloudflare.com/client/v4${path}" \
+      -H "Authorization: Bearer ${CF_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data-raw "${data}"
+  else
+    curl -sS -X "${method}" "https://api.cloudflare.com/client/v4${path}" \
+      -H "Authorization: Bearer ${CF_API_TOKEN}" \
+      -H "Content-Type: application/json"
+  fi
+}
+
+wait_apiserver_ready() {
+  # $1 timeout seconds (default 180), $2 interval seconds (default 5)
+  local timeout_s="${1:-180}"
+  local interval_s="${2:-5}"
+  log_info "Checking Kubernetes apiserver readiness (/readyz) with timeout ${timeout_s}s..."
+  if ! timeout "${timeout_s}s" bash -lc \
+    'until kubectl --request-timeout=10s get --raw=/readyz >/dev/null 2>&1; do echo "    ...apiserver not ready yet"; sleep '"${interval_s}"'; done'; then
+    log_error_and_exit "Kubernetes apiserver is not ready within ${timeout_s}s."
+  fi
+  log_success "Kubernetes apiserver reports Ready."
+}
+
+ensure_cloudflare_wildcard_a() {
+  # Non-interactive, state-driven; creates or updates wildcard A only when needed.
+  log_step 0 "Ensure Cloudflare wildcard DNS"
+  local zone_name="${DOMAIN_NAME}"
+  local sub_wildcard="*.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
+
+  log_info "Resolving Cloudflare Zone ID for ${zone_name} ..."
+  local zone_resp; zone_resp=$(cf_api GET "/zones?name=${zone_name}")
+  local zone_id; zone_id=$(echo "${zone_resp}" | jq -r '.result[0].id')
+  if [[ -z "${zone_id}" || "${zone_id}" == "null" ]]; then
+    log_error_and_exit "Cloudflare zone '${zone_name}' not found."
+  fi
+  log_success "Cloudflare Zone ID acquired: ${zone_id}"
+
+  log_info "Checking existing DNS record for ${sub_wildcard} (type A) ..."
+  # URL-encode "*." as %2A.
+  local qname; qname="%2A.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
+  local rec_resp; rec_resp=$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${qname}")
+  local rec_id; rec_id=$(echo "${rec_resp}" | jq -r '.result[0].id // empty')
+  local rec_ip; rec_ip=$(echo "${rec_resp}" | jq -r '.result[0].content // empty')
+
+  if [[ -n "${rec_id}" ]]; then
+    if [[ "${rec_ip}" == "${VPS_IP}" ]]; then
+      log_success "Wildcard A already correct: ${sub_wildcard} -> ${VPS_IP} (no action)."
+    else
+      log_info "Updating wildcard A to ${VPS_IP} ..."
+      local payload; payload=$(jq -nc --arg name "${sub_wildcard}" --arg ip "${VPS_IP}" --argjson proxied ${CF_PROXIED} \
+        '{type:"A", name:$name, content:$ip, ttl:1, proxied:$proxied}')
+      local up_resp; up_resp=$(cf_api PUT "/zones/${zone_id}/dns_records/${rec_id}" "${payload}")
+      if [[ "$(echo "${up_resp}" | jq -r '.success')" != "true" ]]; then
+        echo "${up_resp}" | sed 's/^/CF-ERR: /g'
+        log_error_and_exit "Failed to update wildcard A record."
+      fi
+      log_success "Wildcard A updated: ${sub_wildcard} -> ${VPS_IP}"
+    fi
+  else
+    log_info "Creating wildcard A ${sub_wildcard} -> ${VPS_IP} ..."
+    local payload; payload=$(jq -nc --arg name "${sub_wildcard}" --arg ip "${VPS_IP}" --argjson proxied ${CF_PROXIED} \
+      '{type:"A", name:$name, content:$ip, ttl:1, proxied:$proxied}')
+    local cr_resp; cr_resp=$(cf_api POST "/zones/${zone_id}/dns_records" "${payload}")
+    if [[ "$(echo "${cr_resp}" | jq -r '.success')" != "true" ]]; then
+      echo "${cr_resp}" | sed 's/^/CF-ERR: /g'
+      log_error_and_exit "Failed to create wildcard A record."
+    fi
+    log_success "Wildcard A created: ${sub_wildcard} -> ${VPS_IP}"
+  fi
+
+  log_info "Verifying public resolution via 1.1.1.1 ..."
+  local probe_fqdn="test.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
+  if ! timeout 60 bash -lc "until dig +short @1.1.1.1 ${probe_fqdn} A | grep -q '^${VPS_IP}\$'; do echo '    ...waiting DNS...'; sleep 5; done"; then
+    log_warn "Public resolution for ${probe_fqdn} did not return ${VPS_IP} within timeout."
+  else
+    log_success "Public DNS resolution OK for wildcard subdomain."
+  fi
+}
 
 # --- [SECTION 2: LOGGING & DIAGNOSTICS] ---
 log_step() { printf "\n\n\033[1;34m# ============================================================================== #\033[0m\n"; printf "\033[1;34m# STEP %s: %s (Timestamp: %s)\033[0m\n" "$1" "$2" "$(date -u --iso-8601=seconds)"; printf "\033[1;34m# ============================================================================== #\033[0m\n\n"; }
@@ -156,7 +242,7 @@ diagnose_traefik_install() {
 
     echo "==== [DIAG] helm-controller status ===="
     kubectl -n kube-system get deploy/helm-controller -o yaml 2>/dev/null || true
-    kubectl -n kube-system logs deploy/helm-controller --tail=300 2>/dev/null || true
+    kubectl -n kube-system logs deploy/helm-controller --tail=100 2>/dev/null || true
 
     echo "==== [DIAG] HelmChart traefik (if any) ===="
     kubectl -n kube-system get helmchart traefik -o yaml 2>/dev/null || true
@@ -201,7 +287,10 @@ function perform_system_cleanup() {
 
     log_info "Reloading systemd and cleaning journals for k3s and docker..."
     systemctl daemon-reload
-    journalctl --rotate && journalctl --vacuum-time=1s
+    # --- [MODIFY START] targeted journal handling (do not vacuum unrelated logs) ---
+    log_info "Rotating systemd journal only (no global vacuum; keep unrelated services' logs)..."
+    journalctl --rotate || true
+    # --- [MODIFY END] ---
     
     log_success "System cleanup complete."
 }
@@ -237,9 +326,8 @@ function install_k3s() {
     mkdir -p /var/lib/rancher/k3s/server/manifests
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")"
 
-    # [MODIFY] Use top-level keys for k3s-bundled Traefik chart values
-    log_info "Creating Traefik HelmChartConfig with CRD provider and frps (7000/TCP) entryPoint..."
-    cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF'
+  log_info "Creating Traefik HelmChartConfig with CRD provider and frps (7000/TCP) entryPoint..."
+  cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -247,26 +335,36 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
-    # k3s-bundled traefik chart expects top-level keys (not under 'traefik:')
+    # 启用 CRD/Ingress 两类 provider，并让 Ingress 使用已发布的服务做状态回填
     providers:
       kubernetesCRD:
         enabled: true
       kubernetesIngress:
         publishedService:
           enabled: true
+
+    # 正确的入口点定义（每个入口点内使用 expose.default）
     ports:
       web:
-        expose: true
-        exposedPort: 80
         port: 8000
+        exposedPort: 80
+        expose:
+          default: true
       websecure:
-        expose: true
-        exposedPort: 443
         port: 8443
+        exposedPort: 443
+        expose:
+          default: true
       frps:
-        expose: true
-        exposedPort: 7000
         port: 7000
+        exposedPort: 7000
+        protocol: TCP
+        expose:
+          default: true
+
+    # 为 websecure 显式启用 TLS（由 IngressRoute/Certificate 控制证书）
+    additionalArguments:
+      - "--entrypoints.websecure.http.tls=true"
 EOF
 
     cat > "${KUBELET_CONFIG_PATH}" << EOF
@@ -336,9 +434,8 @@ EOF
 
     log_info "Checking Service/traefik exposes required ports (80, 443, 7000)..."
     local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
-    if ! run_with_retry "${ports_cmd} | grep -Eq '\\b80\\b' && ${ports_cmd} | grep -Eq '\\b443\\b' && ${ports_cmd} | grep -Eq '\\b7000\\b'" "Service/traefik to expose 80,443,7000" 240 10; then
+    if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b7000\b'" "Service/traefik to expose 80,443,7000" 300 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
-        # [NEW] One-shot diagnostics to confirm values merge
         diagnose_traefik_values_merge
         log_error_and_exit "Traefik Service does not expose required ports."
     fi
@@ -364,7 +461,7 @@ function verify_frps_entrypoint_and_tls() {
         log_info "Failed TCP connect to ${VPS_IP}:7000. Dumping diagnostics:"
         kubectl -n kube-system get svc traefik -o wide || true
         kubectl -n kube-system get pods -l app.kubernetes.io/name=traefik -o wide || true
-        kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=300 || true
+        kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=100 || true
         log_warn "Possible external firewall or provider-level filtering on port 7000."
         log_error_and_exit "frps entryPoint is not externally reachable on ${VPS_IP}:7000."
     fi
@@ -378,10 +475,10 @@ function verify_frps_entrypoint_and_tls() {
         log_info "List certificates in frp-system for reference:"
         kubectl -n frp-system get certificate || true
     else
-        if ! run_with_retry "kubectl -n frp-system wait --for=condition=Ready certificate/${cert_name} --timeout=300s" "Wildcard Certificate '${cert_name}' to be Ready" 320 10; then
+        if ! run_with_retry "kubectl -n frp-system wait --for=condition=Ready certificate/${cert_name} --timeout=100s" "Wildcard Certificate '${cert_name}' to be Ready" 320 10; then
             log_info "Certificate not Ready. Dumping certificate and cert-manager logs:"
             kubectl -n frp-system describe certificate "${cert_name}" || true
-            kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=300 || true
+            kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=100 || true
             log_error_and_exit "Wildcard certificate '${cert_name}' not Ready."
         fi
         log_success "Wildcard certificate '${cert_name}' is Ready."
@@ -435,37 +532,77 @@ function bootstrap_gitops() {
 
 function deploy_applications() {
     log_step 5 "Deploy Core Applications via GitOps"
-    
-    log_info "Applying application definitions for Argo CD to manage..."
-    kubectl apply -f kubernetes/apps/
-    
+
+    # 1) 仅提交 cert-manager Application
+    log_info "Applying cert-manager Application (only)..."
+    kubectl apply -f kubernetes/apps/cert-manager-app.yaml
+
+    # 2) API server 就绪门控，避免 Admission 注册过程的瞬时失败
+    wait_apiserver_ready 300 5
+
+    # 3) 等待 cert-manager 核心 Deployment 实际就绪（比直接看 Argo Application 更贴近事实）
+    log_info "Waiting for cert-manager Deployments to become Available..."
+    timeout 600 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done'
+    if ! kubectl -n cert-manager rollout status deploy/cert-manager --timeout=7m; then
+    kubectl -n cert-manager describe deploy cert-manager || true
+    kubectl -n cert-manager logs -l app.kubernetes.io/name=cert-manager --tail=200 || true
+    log_error_and_exit "Deployment cert-manager failed to roll out."
+    fi
+    if ! kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=7m; then
+    kubectl -n cert-manager describe deploy cert-manager-webhook || true
+    kubectl -n cert-manager logs -l app.kubernetes.io/name=webhook --tail=200 || true
+    log_error_and_exit "Deployment cert-manager-webhook failed to roll out."
+    fi
+    log_success "cert-manager core Deployments are Available."
+
+    # 4) 再做一次 apiserver 就绪门控（webhook/CRD 安装后常见波动）
+    wait_apiserver_ready 300 5
+
+    # 5) 从 Argo 视角等待 cert-manager Application Healthy（延长超时以适应首次安装）
     log_info "Waiting for Cert-Manager application to become Healthy in Argo CD..."
-    if ! run_with_retry "kubectl get application/cert-manager -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Cert-Manager Argo CD App to be Healthy" 300; then
-        log_error_and_exit "Cert-Manager deployment via Argo CD failed."
+    if ! run_with_retry "kubectl get application/cert-manager -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Cert-Manager Argo CD App to be Healthy" 100 10; then
+    kubectl get application/cert-manager -n argocd -o yaml || true
+    kubectl -n cert-manager get pods -o wide || true
+    kubectl -n cert-manager get events --sort-by=.lastTimestamp | tail -n 50 || true
+    kubectl -n argocd get events --sort-by=.lastTimestamp | tail -n 50 || true
+    log_error_and_exit "Cert-Manager deployment via Argo CD failed (not Healthy within timeout)."
     fi
     log_success "Cert-Manager application is Healthy in Argo CD."
 
-    log_info "Verifying that the cert-manager webhook is ready to serve requests..."
-    if ! run_with_retry "kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=3m" "cert-manager webhook Deployment to be Available" 180; then
-        log_info "Cert-Manager webhook did not become available. Dumping deployment status and logs:"
-        kubectl -n cert-manager describe deployment/cert-manager-webhook
-        kubectl -n cert-manager logs -l app.kubernetes.io/name=webhook --all-containers
-        log_error_and_exit "Cert-Manager webhook verification failed."
-    fi
-    log_success "Cert-Manager webhook is available."
-    
+    log_info "Applying remaining Applications (excluding n8n)..."
+    # frps 独立管理
+    kubectl apply -f kubernetes/apps/frps-app.yaml
+    # core-manifests 仅包含 cluster-issuer
+    kubectl apply -f kubernetes/apps/core-manifests-app.yaml
+    # 新增两个静态 ingress 应用
+    kubectl apply -f kubernetes/apps/argocd-ingress-app.yaml
+    kubectl apply -f kubernetes/apps/authentik-ingress-static-app.yaml
+
+    # 逐个等待 Healthy（放宽超时以适应首次签发/拉起）
     log_info "Waiting for core-manifests application to become Healthy..."
-    if ! run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 300; then
-        log_info "Core manifest deployment via Argo CD failed. Dumping application status:"
-        kubectl get application/core-manifests -n argocd -o yaml
-        log_error_and_exit "Core manifest deployment via Argo CD failed."
+    if ! run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 600 10; then
+    kubectl get application/core-manifests -n argocd -o yaml || true
+    log_error_and_exit "core-manifests not Healthy."
     fi
-    
-    log_success "All applications are managed by Argo CD and report as Healthy."
+
+    log_info "Waiting for argocd-ingress application to become Healthy..."
+    if ! run_with_retry "kubectl get application/argocd-ingress -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "argocd-ingress Argo CD App to be Healthy" 600 10; then
+    kubectl get application/argocd-ingress -n argocd -o yaml || true
+    log_error_and_exit "argocd-ingress not Healthy."
+    fi
+
+    log_info "Waiting for authentik-ingress-static application to become Healthy..."
+    if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 600 10; then
+    kubectl get application/authentik-ingress-static -n argocd -o yaml || true
+    log_error_and_exit "authentik-ingress-static not Healthy."
+    fi
+
+    log_success "Remaining applications submitted and Healthy."
 }
 
 function final_verification() {
     log_step 6 "Final End-to-End Verification"
+    wait_apiserver_ready 180 5
 
     log_info "Verifying ClusterIssuer 'cloudflare-staging' is ready..."
     if ! run_with_retry "kubectl wait --for=condition=Ready clusterissuer/cloudflare-staging --timeout=2m" "ClusterIssuer to be Ready" 120 10; then
@@ -507,7 +644,8 @@ main() {
     exec &> >(tee -a "$LOG_FILE")
 
     log_info "Deployment Bootstrapper (v23.1) initiated. Full log: ${LOG_FILE}"
-    
+
+    ensure_cloudflare_wildcard_a
     perform_system_cleanup
     deploy_etcd
     install_k3s
