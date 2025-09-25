@@ -80,6 +80,74 @@ run_with_retry() {
     return 0
 }
 
+# Single-shot job logs collector for helm jobs
+print_job_pod_logs() {
+    # $1: namespace, $2: job name
+    local ns="$1"; local job="$2"
+    echo "==== [DIAG] Logs for Job ${ns}/${job} ===="
+    local pods
+    pods=$(kubectl -n "${ns}" get pods --selector=job-name="${job}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
+    if [[ -z "${pods}" ]]; then
+        echo "(no pods found for job ${job})"
+        return 0
+    fi
+    for p in ${pods}; do
+        echo "--- Pod: ${p} (containers) ---"
+        kubectl -n "${ns}" get pod "${p}" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true
+        echo
+        for c in $(kubectl -n "${ns}" get pod "${p}" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null); do
+            echo "----- Container: ${c} -----"
+            kubectl -n "${ns}" logs "${p}" -c "${c}" --tail=500 2>/dev/null || true
+        done
+    done
+}
+
+# Wait helm install job to succeed; no early-exit on BackOff (controller may retry)
+wait_helm_job_success() {
+    # $1: namespace, $2: job name, $3: timeout seconds
+    local ns="$1"; local job="$2"; local timeout_s="$3"
+    log_info "Waiting Job ${ns}/${job} to succeed..."
+    if ! timeout "${timeout_s}s" bash -lc "until [[ \$(kubectl -n ${ns} get job ${job} -o jsonpath='{.status.succeeded}' 2>/dev/null) == 1 ]]; do sleep 5; done"; then
+        log_warn "Timeout waiting Job ${ns}/${job} to succeed."
+        print_job_pod_logs "${ns}" "${job}"
+        return 1
+    fi
+    log_success "Job ${ns}/${job} succeeded."
+    return 0
+}
+
+# Wait all required Traefik CRDs available after traefik-crd job
+wait_for_traefik_crds() {
+    log_info "Waiting for Traefik CRDs to be established in API..."
+    local crds=(
+        ingressroutes.traefik.io
+        ingressroutetcps.traefik.io
+        ingressrouteudps.traefik.io
+        middlewares.traefik.io
+        traefikservices.traefik.io
+        tlsoptions.traefik.io
+        serverstransports.traefik.io
+    )
+    for c in "${crds[@]}"; do
+        if ! run_with_retry "kubectl get crd ${c} >/dev/null 2>&1" "CRD ${c} present" 180 5; then
+            log_error_and_exit "Required CRD ${c} not found after traefik-crd installation."
+        fi
+    done
+    log_success "All Traefik CRDs are present."
+}
+
+# [New] Dump HelmChart & HelmChartConfig valuesContent once for high-value diagnostics
+diagnose_traefik_values_merge() {
+    echo "==== [DIAG] HelmChart kube-system/traefik (spec.valuesContent) ===="
+    kubectl -n kube-system get helmchart traefik -o jsonpath='{.spec.valuesContent}' 2>/dev/null || true
+    echo
+    echo "==== [DIAG] HelmChartConfig kube-system/traefik (spec.valuesContent) ===="
+    kubectl -n kube-system get helmchartconfig traefik -o jsonpath='{.spec.valuesContent}' 2>/dev/null || true
+    echo
+    echo "==== [DIAG] Traefik Service (full manifest) ===="
+    kubectl -n kube-system get svc traefik -o yaml 2>/dev/null || true
+}
+
 # --- New: compact diagnostic for Traefik installation ---
 diagnose_traefik_install() {
     # Single-shot diagnostics, no loops. Minimal but high-value.
@@ -162,7 +230,6 @@ function deploy_etcd() {
     fi
 }
 
-
 function install_k3s() {
     log_step 3 "Install and Verify K3S"
 
@@ -170,8 +237,9 @@ function install_k3s() {
     mkdir -p /var/lib/rancher/k3s/server/manifests
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")"
 
+    # [MODIFY] Use top-level keys for k3s-bundled Traefik chart values
     log_info "Creating Traefik HelmChartConfig with CRD provider and frps (7000/TCP) entryPoint..."
-    cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << EOF
+    cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -179,25 +247,26 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
+    # k3s-bundled traefik chart expects top-level keys (not under 'traefik:')
     providers:
       kubernetesCRD:
         enabled: true
+      kubernetesIngress:
+        publishedService:
+          enabled: true
     ports:
       web:
         expose: true
         exposedPort: 80
         port: 8000
-        protocol: TCP
       websecure:
         expose: true
         exposedPort: 443
         port: 8443
-        protocol: TCP
       frps:
         expose: true
         exposedPort: 7000
         port: 7000
-        protocol: TCP
 EOF
 
     cat > "${KUBELET_CONFIG_PATH}" << EOF
@@ -234,41 +303,43 @@ EOF
         log_error_and_exit "K3s cluster verification failed."
     fi
 
-    # --- Robust Traefik bring-up sequence ---
-    log_info "Waiting for helm-controller to be Ready..."
-    if ! run_with_retry "kubectl -n kube-system rollout status deploy/helm-controller --timeout=60s" "helm-controller rollout" 300 10; then
-        diagnose_traefik_install
-        log_error_and_exit "helm-controller not Ready; cannot install Traefik."
-    fi
-    log_success "helm-controller is Ready."
-
-    log_info "Waiting for HelmChart 'traefik' resource to appear (created by k3s) ..."
-    if ! run_with_retry "kubectl -n kube-system get helmchart traefik >/dev/null 2>&1" "HelmChart/traefik exists" 180 5; then
-        diagnose_traefik_install
+    # Wait for k3s HelmChart resources
+    log_info "Waiting for HelmChart 'traefik' to appear..."
+    if ! run_with_retry "kubectl -n kube-system get helmchart traefik >/dev/null 2>&1" "HelmChart/traefik exists" 240 5; then
         log_error_and_exit "HelmChart 'traefik' not found; Traefik installation not started."
     fi
     log_success "HelmChart/traefik detected."
 
-    log_info "Waiting for Traefik Deployment object to be created..."
-    if ! run_with_retry "kubectl -n kube-system get deploy traefik >/dev/null 2>&1" "Deployment/traefik exists" 240 5; then
-        diagnose_traefik_install
-        log_error_and_exit "Traefik Deployment not created."
+    # Wait CRD job success then ensure CRDs visible at API level
+    log_info "Waiting for job/helm-install-traefik-crd to succeed..."
+    if ! wait_helm_job_success "kube-system" "helm-install-traefik-crd" 360; then
+        log_error_and_exit "job/helm-install-traefik-crd failed."
+    fi
+    wait_for_traefik_crds
+
+    # Wait Traefik install job success (controller will retry if first attempt failed)
+    log_info "Waiting for job/helm-install-traefik to succeed..."
+    if ! wait_helm_job_success "kube-system" "helm-install-traefik" 600; then
+        log_error_and_exit "job/helm-install-traefik failed."
     fi
 
+    # Deployment + Service port verification
+    log_info "Waiting for Traefik Deployment to be created..."
+    if ! run_with_retry "kubectl -n kube-system get deploy traefik >/dev/null 2>&1" "Deployment/traefik exists" 240 5; then
+        log_error_and_exit "Traefik Deployment not created."
+    fi
     log_info "Waiting for Traefik Deployment rollout..."
     if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=90s" "Traefik Deployment rollout" 480 10; then
-        diagnose_traefik_install
         log_error_and_exit "Traefik Deployment failed to roll out."
     fi
     log_success "Traefik Deployment is Ready."
 
     log_info "Checking Service/traefik exposes required ports (80, 443, 7000)..."
-    # Expect exactly these three ports exposed (order-independent)
     local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
-    if ! run_with_retry "${ports_cmd} | grep -Eq '\\b80\\b.*\\b443\\b.*\\b7000\\b|\\b80\\b.*\\b7000\\b.*\\b443\\b|\\b443\\b.*\\b80\\b.*\\b7000\\b|\\b443\\b.*\\b7000\\b.*\\b80\\b|\\b7000\\b.*\\b80\\b.*\\b443\\b|\\b7000\\b.*\\b443\\b.*\\b80\\b'" "Service/traefik to expose 80,443,7000" 180 10; then
+    if ! run_with_retry "${ports_cmd} | grep -Eq '\\b80\\b' && ${ports_cmd} | grep -Eq '\\b443\\b' && ${ports_cmd} | grep -Eq '\\b7000\\b'" "Service/traefik to expose 80,443,7000" 240 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
-        kubectl -n kube-system get svc traefik -o yaml || true
-        diagnose_traefik_install
+        # [NEW] One-shot diagnostics to confirm values merge
+        diagnose_traefik_values_merge
         log_error_and_exit "Traefik Service does not expose required ports."
     fi
     log_success "Traefik Service exposes 80/443/7000."
