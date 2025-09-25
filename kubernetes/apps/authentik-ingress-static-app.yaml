@@ -5,7 +5,7 @@ metadata:
   name: authentik-ingress-static
   namespace: argocd
   annotations:
-    argocd.argoproj.io/sync-wave: "0"   # 可选
+    argocd.argoproj.io/sync-wave: "20"   # 可选
 spec:
   project: default
   source:
