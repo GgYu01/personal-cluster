@@ -1,11 +1,12 @@
 tree  >  /root/log.log  2>&1
-tail -n +1   kubernetes/applications/*.yaml  kubernetes/manifests/argocd-ingress/*.yaml kubernetes/manifests/cluster-issuer/*.yaml ./deploy.sh  *.log >>  /root/log.log  2>&1
+tail -n +1 kubernetes/apps/* kubernetes/bootstrap/*  kubernetes/manifests/argocd-ingress/* kubernetes/manifests/authentik-ingress/* kubernetes/manifests/frps/* kubernetes/manifests/cluster-issuer/* ./deploy.sh   >>  /root/log.log  2>&1
 
 
-由于你你现在数据库严重滞后，请不要直接回答，而是告诉我如何提供给你你现在有可能用到所有部分的官方文档信息或者日志、debug、错误信息，并且告诉我如何找到对应文档或者本地存储的信息、辅助调试的信息，请务必保证代码和方案与设计的质量，不要直接尝试解决问题，也不要给出任何解决的方案，一定要等我把文档和本地调试、日志、抓取的信息发给你后才可以开始做设计或者是代码编写。不要盲目信任你的记忆信息，而是任何时候以我提供给你的官方最新文档为准。
+由于你你现在数据库严重滞后，请不要直接回答，而是告诉我如何提供给你你现在有可能用到所有部分的官方文档信息或者日志,最好提供具体的网页及如何详细步骤点击什么页面找到目录中哪部分，有详细引导过程、debug、错误信息，并且告诉我如何找到对应文档或者本地存储的信息、辅助调试的信息，请务必保证代码和方案与设计的质量，不要直接尝试解决问题，也不要给出任何解决的方案，一定要等我把文档和本地调试、日志、抓取的信息发给你后才可以开始做设计或者是代码编写。不要盲目信任你的记忆信息，而是任何时候以我提供给你的官方最新文档为准。
 
 请深度严谨全面思考你的方案步骤的逻辑和合理性，绝对不要浅思考，你应该反复推理验证逻辑关系是否正确。你的日志、输出、注释可以用专业的英文，但是对我说明的内容必须使用简体中文。
 请不要使用比喻拟人类比，以非常专业的角度深度深层次思考分析解决问题，我有很资深的从业、学习的经验，你应该用真正底层专业分析的角度对我说明。
+你输出的必须是标准markdown格式正文说明，正文说明请使用简体中文，代码和命令必须用代码块包裹起来，注释保持简要的英文。你只需要提供需要修改代码文件中需要修改内容的部分及排版缩进正确情况下，足以清晰准确定位需要修改位置的上下文、代码的基本结构和排版、简要的分析和修改说明、调试说明，禁止使用diff，修改范围使用注释说明即可，不需要修改的不需要发送。
 
 我希望使用不安全的环境，除了域名证书和HTTPS以外不要有任何加密，所有密钥密码都硬编码且用简单的密码。
 我希望直接使用通配符域名记录DNS的A解析，不需要单独指定某个域名对应的A解析。
@@ -16,7 +17,7 @@ https://github.com/GgYu01/personal-cluster.git 是我的terraform、argocd 配�
 cloudflare api token 是 "vi7hkPq4FwD5ttV4dvR_IoNVEJSphydRPcT0LVD-"
 acme_email 是 "1405630484@qq.com"
 部署逻辑应该由外部世界的实际状态，例如DNS记录是否正确驱动，而不是由一个本地状态文件terraform.tfstate驱动，例如检测DNS解析正确后不应该再执行设置DNS解析IP的步骤。
-数据库不使用K3S 嵌入式ETCD，而是用独立部署的ETCD。Tarefik不用K3S自带的Tarefik，而是用独立部署的Tarefik，不用自签名证书，用Lets encrypt 下发的证书，但是目前是验证阶段，正式的证书可能有获取次数限制，你需要考虑到这个可能需要获取临时证书。
+数据库不使用K3S 嵌入式ETCD，而是用独立部署的ETCD。Tarefik用K3S自带的Tarefik。不用自签名证书，用Lets encrypt 下发的证书，但是目前是验证阶段，正式的证书可能有获取次数限制，你需要考虑到这个可能需要获取临时证书。
 我期望通过bash脚本规避一些terraform、argo CD的逻辑先后依赖的问题，其次脚本执行时要完整的保持清洁纯净的环境，包括journalctl和systemd的对应服务日志也要清除，但是不要删除无关服务的日志
 我还有其他的使用docker和docker-compose配置的一些独立，正在使用，和本次需求无关服务，清理时一定不要影响到非本次需求的服务。关于kubeconfig我希望最好简单粗暴执行成功率高的输出在kubectl的默认配置路径下。
 脚本中禁止重启主机系统，如有必要应该在步骤中对用户说明。
@@ -32,82 +33,35 @@ argo cd chart 是 8.2.7
 我目前放弃了terraform，转向了bash部署，terraform太复杂不适合我的环境，我的能力难以cover，后续部署全部成功后review会逐渐替换启用。
 从项目部署初期实验来说，我期望 使用 串行化、可验证的引导流程。脚本将逐个部署核心应用，并在部署下一个应用前，执行深入的、有针对性的健康检查，确保其底层资源真实可用。
 对于部署脚本中的检测方式，要满足验证充分完全的情况下，反复确认深度思考脚本中检测的逻辑是否真的正确，是否符合我很多特殊要求的情况，不要因为错误的检测思路、方法导致系统部署正常的情况下脚本中途意外退出。
-关于脚本中的日志，要保证能全方位多角度获取尽可能全面的日志内容，多方面辅助debug检查流程。但是要想办法，比如禁止restart或者其他方案，防止因为反复重启输出大量无效日志，日志不要有过多重复。
-
-以下是K3S官网最新文档目录，你需要什么内容可以告诉我，我会提供对应章节的文档
-K3s - Lightweight Kubernetes
-Quick-Start Guide
-Installation
-
-Requirements
-Configuration Options
-Private Registry Configuration
-Embedded Registry Mirror
-Air-Gap Install
-Managing Server Roles
-Managing Packaged Components
-Uninstalling K3s
-Cluster Datastore
-
-Backup and Restore
-High Availability Embedded etcd
-High Availability External DB
-Cluster Load Balancer
-Upgrades
-
-Stopping K3s
-Manual Upgrades
-Automated Upgrades
-Rolling Back K3s
-Security
-
-Secrets Encryption
-CIS Hardening Guide
-CIS 1.9 Self Assessment Guide
-CIS 1.8 Self Assessment Guide
-CIS 1.7 Self Assessment Guide
-CLI Tools
-
-server
-agent
-certificate
-etcd-snapshot
-secrets-encrypt
-token
-Architecture
-Cluster Access
-Volumes and Storage
-Import Images
-Networking
-
-Basic Network Options
-Distributed hybrid or multicloud cluster
-Multus and IPAM plugins
-Networking Services
-Helm
-Advanced Options / Configuration
-Reference
-Environment Variables
-Flag Deprecation
-Metrics
-Resource Profiling
-Release Notes
-v1.33.X
-v1.32.X
-v1.31.X
-v1.30.X
-v1.29.X
-Older...
-v1.28.X
-v1.27.X
-v1.26.X
-v1.25.X
-v1.24.X
-Related Projects
-Known Issues
-FAQ
+关于脚本中的日志，要保证能全方位多角度获取尽可能全面的日志内容，多方面辅助debug检查流程。但是要想办法，比如禁止restart或者其他方案，防止因为反复重启输出大量无效日志，日志不要有过多重复。我认为脚本中应该针对错误的内容和步骤，在不重复输出、获取过多错误日志且保证可以获取更多诊断辅助判断的信息的情况下，打印尽可能全面的信息辅助判断流程到底发生了什么，哪里卡住了，最好能通过多方面的信息、诊断、调试信息，直接通过逻辑判断错误点，而不是事后找。
 
 
-我当前源码和日志如下，执行部署脚本时存在重大问题，请你提供需要的最新官方文档后综合诊断：
+
+请深度全面思考，我是全栈工程师，请从专业的角度对我进行说明，禁止使用对入门者或者幼童常用的比喻拟人手法。你输出的必须是标准markdown格式正文说明，正文说明请使用简体中文，代码和命令必须用代码块包裹起来，注释保持简要的英文。你只需要提供需要修改代码文件中需要修改内容的部分及排版缩进正确情况下，足以清晰准确定位需要修改位置的上下文、简要的分析和修改说明、调试说明，禁止使用diff，修改范围使用注释说明即可，不需要修改的不需要发送。 
+
+
+我刚刚偶然发现通过公网WebUI，主机地址和端口使用局域网对应的IP / 端口时，当访问所在的客户端主机可以联通服务器所在局域网时是可以访问通的。 我由此得出了一个结论：WebUI / 数据很可能是相当独立分离的。 我现在还是缺乏完整的debug路径，我想要搞清楚这个webUI显示地图到底是数据怎么链路实现的，为什么输入的这个主机 、 ip 端口好像需要客户端访问通才行？ 我发现局域网设备不存在WebUI页面雷达地图延迟的问题 ，由此，我希望优化一下路径，我希望数据还是传输在服务端本机 / 局域网以获取最低的延迟 ， 而不是客户端真的直接访问到data数据端。预期是服务端拿到数据后经过某种合成最后呈现页面出来，酌情可以考虑加入其他服务来实现。
+
+我不太接受直连的方案，在不修改后端代码，只有config，没有源码，闭源的情况下，我需要让客户端访问到的是在服务端处理好的数据，这很重要。 请注意，我说的服务端是值得Windows 辅助程序的server frpclient所在的副机，而不是Linux docker compose那台运行frpserver的机器。
+
+
+我现在已经实现了初步的方案，现在我需要进阶，我现在需要使用一个Linux公网服务器提供服务的情况下，结合域名和Lets encrypt免费证书，做一套很专业的服务架构出来，为每一个使用地图雷达的客户最好可以直接用443或者80端口和域名，我完全不需要除了域名以外的安全性，尽量省事，保证连通、延迟低即可，可以随意无限制浪费一些其他的资源保证稳定和低延迟。我现在需要你帮我设计这个复杂体系的架构，请你开始设计，谢谢。禁止提供任何的具体命令、代码，我们现在仅作方案和架构设计的讨论。
+
+1：我预期每个人一个子域名
+2：我希望在不会影响其他人连续正常使用的情况下，可以为每个用户提供一个子域名，我希望类似使用卡密或者某一串字符，作为域名的前缀整体服务来说我希望是解耦的，每个人只需要关注自己的特殊序列号+域名即可，可能后期还要引入过期机制。高度灵活可自由配置，尽量管控都放在Linux服务端，客户Windows仅提供一些数据。
+
+架构我感觉可以引入更多专业时尚新潮的组件服务，甚至类似token / 序列号可以和用户名密码关联，可以web查询过期日期等。有必要的话可以引入K3S，时尚新潮最重要，尤其是用户名密码 序列号这个，最好有自动一些方便实现的方案，还要有过期时间，用户名密码不过期但是 序列号、token等可以定期过期。
+
+我其实也不是刚需token，token序列号一定是可以不需要的，只要有某种通过用户名+密码，且可以设置租期，并且能延长租期的手段即可。而且最好还有方便查询的手段，如果有WebUI更好，我之前只是想偷懒用用户名+密码+用户名关联的多个可过期的token或者key。如果有很多新潮的类似方案请你尽可能多的向我推荐，你选用的服务和架构可以尽可能新、时尚、社区，对专业性要求低，最好有现成的美观的页面，谢谢。我不知道怎么做这样的页面或者服务架构。除了域名证书和用户密码以外其他安全性尽可能去掉，保证整体架构连通、部署简便。
+
+我期望本身架构是专业化的，加入更多云原生的思想架构，可持续部署灵活弹性等，但是架构下选择的服务可以是新潮稳定性专业性没那么强的。比如可以酌情引入argoCD还有其他的服务。
+
+
+还有，因为这是一个Web服务，如果你有更好的建议，比如如何让用户很简单的结合 序列号 / token 就能登录网页。网页后端我改不了，http://115.120.240.160:19002/?address=115.120.240.160&port=19002&roomId=123456 看起来这个是能避免webUI登录的，我认为可以利用某种方法自动生成链接或者除了roomid以外全部都可以用一个域名代替。
+
+我目前自己的方案如下，优先保证通，不考虑安全性。
+
+目前我疑似部署成功，ArgoCD里frps 是progressing，三小时过去了，Synced。
+
 
 
