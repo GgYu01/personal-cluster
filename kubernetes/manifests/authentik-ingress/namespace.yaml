@@ -1,0 +1,6 @@
+# [ADD START] 明确创建 authentik 命名空间，避免资源引用失败
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: authentik
+# [ADD END]

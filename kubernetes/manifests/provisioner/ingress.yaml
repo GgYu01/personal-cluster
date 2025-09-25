@@ -1,0 +1,18 @@
+# [ADD START] 网关统一域名：portal.core01.prod.gglohh.top
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: provisioner-https
+  namespace: provisioner
+spec:
+  entryPoints:
+    - websecure
+  routes:
+  - match: Host(`portal.core01.prod.gglohh.top`) && (PathPrefix(`/`) || PathPrefix(`/api`))
+    kind: Rule
+    services:
+    - name: provisioner-gateway
+      port: 80
+  tls:
+    secretName: wildcard-core01-prod-gglohh-top-tls
+# [ADD END]

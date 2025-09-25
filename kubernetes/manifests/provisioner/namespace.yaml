@@ -1,0 +1,6 @@
+# [ADD START]
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: provisioner
+# [ADD END]

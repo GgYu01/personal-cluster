@@ -1,0 +1,26 @@
+# [ADD START] 新增：Provisioner 网关（控制面），用于令牌校验与发放 Ephemeral Host
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: provisioner
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "8"  # 在 frps(5) 之后、authentik(10) 之前
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/GgYu01/personal-cluster.git
+    targetRevision: HEAD
+    path: kubernetes/manifests/provisioner
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: provisioner
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+# [ADD END]

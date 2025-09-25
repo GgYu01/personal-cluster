@@ -1,0 +1,26 @@
+# [ADD START] 占位：Provisioner 网关（可用极简容器/自研服务替换）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provisioner-gateway
+  namespace: provisioner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: provisioner-gateway
+  template:
+    metadata:
+      labels:
+        app: provisioner-gateway
+    spec:
+      containers:
+      - name: gateway
+        image: ghcr.io/example/provisioner-gateway:latest  # 占位镜像，后续替换
+        ports:
+        - containerPort: 8080
+        # 需要实现的最小 API（约定）：
+        #   POST /api/v1/session/bootstrap
+        #     入参：shareToken, serial
+        #     出参：{ subdomainLabel: "e-<rand>-<serial>", fqdn: "e-xxx.core01...", frps:{addr, bindPort, quicPort, token}, local:{ip, port} }
+# [ADD END]

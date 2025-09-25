@@ -39,7 +39,7 @@ spec:
     - websecure
   routes:
   - kind: Rule
-    match: HostRegexp(`{subdomain:.+}.core01.prod.gglohh.top`)
+    match: HostRegexp(`e-{subdomain:[a-z0-9-]+}\.core01\.prod\.gglohh\.top`)
     services:
     - name: frps-service
       port: 8080
