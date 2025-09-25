@@ -1,0 +1,5 @@
+# Code Analysis: Creates a dedicated namespace for frps to keep resources isolated.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: frp-system

@@ -1,0 +1,30 @@
+# kubernetes/manifests/frps/config.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frps-config
+  namespace: frp-system
+data:
+  frps.toml: |
+    # --- Core bind ---
+    bindPort = 7000
+
+    # --- Auth (insecure by design) ---
+    [auth]
+    method = "token"
+    token = "password"  # as requested: simple, low-security
+
+    # --- Subdomain host for HTTP vhosts ---
+    subdomainHost = "core01.prod.gglohh.top"
+
+    # --- HTTP vhost for browser side (Traefik terminates TLS at 443) ---
+    vhostHTTPPort = 8080
+    # vhostHTTPSPort is not needed because TLS is terminated by Traefik
+
+    # --- Web dashboard (insecure by design) ---
+    [webServer]
+    addr = "0.0.0.0"
+    port = 7500
+    user = "admin"
+    password = "password"

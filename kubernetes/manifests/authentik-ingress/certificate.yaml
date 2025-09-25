@@ -1,0 +1,13 @@
+# Code Analysis: Manages the TLS certificate for Authentik using your existing ClusterIssuer.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: authentik-tls-staging
+  namespace: authentik
+spec:
+  secretName: authentik-tls-staging
+  issuerRef:
+    name: cloudflare-staging # Uses your existing issuer
+    kind: ClusterIssuer
+  dnsNames:
+  - auth.core01.prod.gglohh.top

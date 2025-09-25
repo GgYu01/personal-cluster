@@ -1,0 +1,36 @@
+# kubernetes/manifests/frps/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frps-server
+  namespace: frp-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frps
+  template:
+    metadata:
+      labels:
+        app: frps
+    spec:
+      containers:
+      - name: frps
+        image: snowdreamtech/frps:0.58.1
+        args: ["-c", "/etc/frp/frps.toml"]
+        ports:
+        - containerPort: 7000
+          name: frps-bind
+        - containerPort: 8080
+          name: vhost-http
+        - containerPort: 7500
+          name: dashboard
+        # envFrom removed (no longer needed)
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/frp
+          readOnly: true
+      volumes:
+      - name: config-volume
+        configMap:
+          name: frps-config

@@ -1,0 +1,28 @@
+# kubernetes/apps/frps-app.yaml
+# Code Analysis: Defines the frps application for Argo CD.
+# This application definition tells Argo CD to manage the resources located
+# in the 'kubernetes/manifests/frps' directory. This keeps all raw manifests
+# centralized, following your existing pattern. A sync-wave of "5" ensures
+# it is deployed after core infrastructure like cert-manager.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: frps
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/GgYu01/personal-cluster.git # Using your existing repo URL
+    targetRevision: HEAD
+    path: kubernetes/manifests/frps # Manages all manifests within this specific path
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: frp-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
