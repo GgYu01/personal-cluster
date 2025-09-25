@@ -1,15 +1,17 @@
-# kubernetes/applications/manifests.yaml
+# apps/authentik-ingress-static-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: core-manifests
+  name: authentik-ingress-static
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"   # 可选
 spec:
   project: default
   source:
     repoURL: https://github.com/GgYu01/personal-cluster.git
     targetRevision: HEAD
-    path: kubernetes/manifests/cluster-issuer
+    path: kubernetes/manifests/authentik-ingress
     directory:
       recurse: true
   destination:
