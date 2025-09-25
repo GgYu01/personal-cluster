@@ -29,6 +29,12 @@ readonly ENVIRONMENT="prod"
 readonly K3S_CLUSTER_TOKEN="admin" # Simple, as requested
 readonly ARGOCD_ADMIN_PASSWORD="password"
 
+# --- ACME & DNS (Cloudflare) ---
+# NOTE: Hard-coded, insecure by design, as requested
+readonly ACME_EMAIL="1405630484@qq.com"
+readonly CF_API_TOKEN="vi7hkPq4FwD5ttV4dvR_IoNVEJSphydRPcT0LVD-"
+readonly WILDCARD_FQDN="*.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"   # *.core01.prod.gglohh.top
+
 # --- Software Versions ---
 readonly K3S_VERSION="v1.33.3+k3s1"
 
@@ -72,6 +78,30 @@ run_with_retry() {
     fi
     log_success "Verified: ${description}."
     return 0
+}
+
+# --- New: compact diagnostic for Traefik installation ---
+diagnose_traefik_install() {
+    # Single-shot diagnostics, no loops. Minimal but high-value.
+    echo "==== [DIAG] kube-system basic resources ===="
+    kubectl -n kube-system get deploy,po,svc,helmchart 2>/dev/null || true
+
+    echo "==== [DIAG] helm-controller status ===="
+    kubectl -n kube-system get deploy/helm-controller -o yaml 2>/dev/null || true
+    kubectl -n kube-system logs deploy/helm-controller --tail=300 2>/dev/null || true
+
+    echo "==== [DIAG] HelmChart traefik (if any) ===="
+    kubectl -n kube-system get helmchart traefik -o yaml 2>/dev/null || true
+
+    echo "==== [DIAG] Traefik deployment (if any) ===="
+    kubectl -n kube-system get deploy/traefik -o yaml 2>/dev/null || true
+    kubectl -n kube-system logs deploy/traefik --tail=200 2>/dev/null || true
+
+    echo "==== [DIAG] Traefik service (if any) ===="
+    kubectl -n kube-system get svc/traefik -o yaml 2>/dev/null || true
+
+    echo "==== [DIAG] Recent kube-system events ===="
+    kubectl -n kube-system get events --sort-by=.lastTimestamp | tail -n 50 2>/dev/null || true
 }
 
 # --- [SECTION 3: DEPLOYMENT FUNCTIONS] ---
@@ -132,14 +162,15 @@ function deploy_etcd() {
     fi
 }
 
+
 function install_k3s() {
     log_step 3 "Install and Verify K3S"
-    
+
     log_info "Preparing K3s manifest and configuration directories..."
     mkdir -p /var/lib/rancher/k3s/server/manifests
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")"
-    
-    log_info "Creating Traefik CRD provider and Kubelet swap configurations..."
+
+    log_info "Creating Traefik HelmChartConfig with CRD provider and frps (7000/TCP) entryPoint..."
     cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << EOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -151,6 +182,22 @@ spec:
     providers:
       kubernetesCRD:
         enabled: true
+    ports:
+      web:
+        expose: true
+        exposedPort: 80
+        port: 8000
+        protocol: TCP
+      websecure:
+        expose: true
+        exposedPort: 443
+        port: 8443
+        protocol: TCP
+      frps:
+        expose: true
+        exposedPort: 7000
+        port: 7000
+        protocol: TCP
 EOF
 
     cat > "${KUBELET_CONFIG_PATH}" << EOF
@@ -180,12 +227,103 @@ EOF
     cp "${KUBECONFIG_PATH}" "${USER_KUBECONFIG_PATH}"
     chown "$(id -u):$(id -g)" "${USER_KUBECONFIG_PATH}"
     export KUBECONFIG="${USER_KUBECONFIG_PATH}"
-    
+
     if ! run_with_retry "kubectl get node $(hostname | tr '[:upper:]' '[:lower:]') --no-headers | awk '{print \$2}' | grep -q 'Ready'" "K3s node to be Ready" 180; then
         log_info "K3s node did not become ready. Dumping K3s service logs:"
         journalctl -u k3s.service --no-pager -n 500
         log_error_and_exit "K3s cluster verification failed."
     fi
+
+    # --- Robust Traefik bring-up sequence ---
+    log_info "Waiting for helm-controller to be Ready..."
+    if ! run_with_retry "kubectl -n kube-system rollout status deploy/helm-controller --timeout=60s" "helm-controller rollout" 300 10; then
+        diagnose_traefik_install
+        log_error_and_exit "helm-controller not Ready; cannot install Traefik."
+    fi
+    log_success "helm-controller is Ready."
+
+    log_info "Waiting for HelmChart 'traefik' resource to appear (created by k3s) ..."
+    if ! run_with_retry "kubectl -n kube-system get helmchart traefik >/dev/null 2>&1" "HelmChart/traefik exists" 180 5; then
+        diagnose_traefik_install
+        log_error_and_exit "HelmChart 'traefik' not found; Traefik installation not started."
+    fi
+    log_success "HelmChart/traefik detected."
+
+    log_info "Waiting for Traefik Deployment object to be created..."
+    if ! run_with_retry "kubectl -n kube-system get deploy traefik >/dev/null 2>&1" "Deployment/traefik exists" 240 5; then
+        diagnose_traefik_install
+        log_error_and_exit "Traefik Deployment not created."
+    fi
+
+    log_info "Waiting for Traefik Deployment rollout..."
+    if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=90s" "Traefik Deployment rollout" 480 10; then
+        diagnose_traefik_install
+        log_error_and_exit "Traefik Deployment failed to roll out."
+    fi
+    log_success "Traefik Deployment is Ready."
+
+    log_info "Checking Service/traefik exposes required ports (80, 443, 7000)..."
+    # Expect exactly these three ports exposed (order-independent)
+    local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
+    if ! run_with_retry "${ports_cmd} | grep -Eq '\\b80\\b.*\\b443\\b.*\\b7000\\b|\\b80\\b.*\\b7000\\b.*\\b443\\b|\\b443\\b.*\\b80\\b.*\\b7000\\b|\\b443\\b.*\\b7000\\b.*\\b80\\b|\\b7000\\b.*\\b80\\b.*\\b443\\b|\\b7000\\b.*\\b443\\b.*\\b80\\b'" "Service/traefik to expose 80,443,7000" 180 10; then
+        echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
+        kubectl -n kube-system get svc traefik -o yaml || true
+        diagnose_traefik_install
+        log_error_and_exit "Traefik Service does not expose required ports."
+    fi
+    log_success "Traefik Service exposes 80/443/7000."
+}
+
+# --- New: verify frps entryPoint & wildcard TLS readiness ---
+function verify_frps_entrypoint_and_tls() {
+    log_step 6 "Verify frps entryPoint listening and wildcard TLS readiness"
+
+    # 1) Verify IngressRouteTCP exists and references entryPoint 'frps'
+    if ! run_with_retry "kubectl -n frp-system get ingressroutetcp frps-tcp-ingress >/dev/null 2>&1" "IngressRouteTCP 'frps-tcp-ingress' present" 120 5; then
+        log_info "Dumping IngressRouteTCP list in frp-system:"
+        kubectl -n frp-system get ingressroutetcp -o yaml || true
+        log_error_and_exit "IngressRouteTCP 'frps-tcp-ingress' not found."
+    fi
+    log_success "IngressRouteTCP 'frps-tcp-ingress' is present."
+
+    # 2) Verify Traefik service exposes 7000 and external TCP is reachable
+    #    This uses a TCP connect check against VPS_IP:7000
+    local tcp_check_cmd="timeout 2 bash -lc '</dev/tcp/${VPS_IP}/7000' >/dev/null 2>&1"
+    if ! run_with_retry "${tcp_check_cmd}" "External TCP connectivity to ${VPS_IP}:7000" 180 5; then
+        log_info "Failed TCP connect to ${VPS_IP}:7000. Dumping diagnostics:"
+        kubectl -n kube-system get svc traefik -o wide || true
+        kubectl -n kube-system get pods -l app.kubernetes.io/name=traefik -o wide || true
+        kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=300 || true
+        log_warn "Possible external firewall or provider-level filtering on port 7000."
+        log_error_and_exit "frps entryPoint is not externally reachable on ${VPS_IP}:7000."
+    fi
+    log_success "frps entryPoint is externally reachable on ${VPS_IP}:7000."
+
+    # 3) Verify wildcard Certificate in frp-system namespace
+    #    Name should match your manifest (e.g. wildcard-core01-prod-gglohh-top)
+    local cert_name="wildcard-core01-prod-gglohh-top"
+    if ! kubectl -n frp-system get certificate "${cert_name}" >/dev/null 2>&1; then
+        log_warn "Certificate '${cert_name}' not found in namespace 'frp-system'. Skipping Ready wait."
+        log_info "List certificates in frp-system for reference:"
+        kubectl -n frp-system get certificate || true
+    else
+        if ! run_with_retry "kubectl -n frp-system wait --for=condition=Ready certificate/${cert_name} --timeout=300s" "Wildcard Certificate '${cert_name}' to be Ready" 320 10; then
+            log_info "Certificate not Ready. Dumping certificate and cert-manager logs:"
+            kubectl -n frp-system describe certificate "${cert_name}" || true
+            kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=300 || true
+            log_error_and_exit "Wildcard certificate '${cert_name}' not Ready."
+        fi
+        log_success "Wildcard certificate '${cert_name}' is Ready."
+    fi
+
+    # 4) Verify TLS Secret exists for Traefik IngressRoute usage
+    local tls_secret="wildcard-core01-prod-gglohh-top-tls"
+    if ! run_with_retry "kubectl -n frp-system get secret ${tls_secret} >/dev/null 2>&1" "TLS Secret '${tls_secret}' present in frp-system" 120 5; then
+        log_info "Dumping secrets in frp-system:"
+        kubectl -n frp-system get secrets || true
+        log_error_and_exit "TLS Secret '${tls_secret}' is missing in frp-system."
+    fi
+    log_success "TLS Secret '${tls_secret}' present in frp-system (for HTTPS on wildcard)."
 }
 
 function bootstrap_gitops() {
@@ -257,7 +395,7 @@ function deploy_applications() {
 
 function final_verification() {
     log_step 6 "Final End-to-End Verification"
-    
+
     log_info "Verifying ClusterIssuer 'cloudflare-staging' is ready..."
     if ! run_with_retry "kubectl wait --for=condition=Ready clusterissuer/cloudflare-staging --timeout=2m" "ClusterIssuer to be Ready" 120 10; then
         log_info "ClusterIssuer did not become ready. Dumping Cert-Manager logs:"
@@ -281,6 +419,9 @@ function final_verification() {
         kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server
         log_error_and_exit "End-to-end verification failed."
     fi
+
+    # --- New: frps entryPoint + wildcard TLS verification ---
+    verify_frps_entrypoint_and_tls
 }
 
 # --- [SECTION 4: MAIN EXECUTION] ---
