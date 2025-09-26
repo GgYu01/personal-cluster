@@ -1,9 +1,13 @@
-# 修改范围：仅确认 tls.secretName 指向本命名空间的 portal-tls-staging
+# 修改范围：在 metadata 增加 Argo CD 同步波次注解（IngressRoute 晚于证书）
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: provisioner-https
   namespace: provisioner
+  annotations:
+    # [ADD START] ensure ingress after cert
+    argocd.argoproj.io/sync-wave: "1"
+    # [ADD END]
 spec:
   entryPoints:
     - websecure
@@ -14,4 +18,4 @@ spec:
     - name: provisioner-gateway
       port: 80
   tls:
-    secretName: portal-tls-staging  # must exist in namespace 'provisioner'
+    secretName: portal-tls-staging

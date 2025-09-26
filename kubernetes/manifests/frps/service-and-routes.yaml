@@ -31,17 +31,21 @@ spec:
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
-metadata:
+metadata: 
   name: frps-http-ingress
   namespace: frp-system
+  annotations:
+    # [ADD START]
+    argocd.argoproj.io/sync-wave: "1"
+    # [ADD END]
 spec:
-  entryPoints:
+  entryPoints: 
     - websecure
-  routes:
+  routes: 
   - kind: Rule
     match: HostRegexp(`e-{subdomain:[a-z0-9-]+}\.core01\.prod\.gglohh\.top`)
-    services:
+    services: 
     - name: frps-service
       port: 8080
-  tls:
+  tls: 
     secretName: wildcard-core01-prod-gglohh-top-tls

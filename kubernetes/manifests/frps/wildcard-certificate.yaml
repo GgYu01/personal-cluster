@@ -1,9 +1,13 @@
-# kubernetes/manifests/frps/wildcard-certificate.yaml
+# 修改范围：增加同步波次注解，确保证书先于 IngressRoute
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: wildcard-core01-prod-gglohh-top
   namespace: frp-system
+  annotations:
+    # [ADD START]
+    argocd.argoproj.io/sync-wave: "0"
+    # [ADD END]
 spec:
   secretName: wildcard-core01-prod-gglohh-top-tls
   issuerRef:

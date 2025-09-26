@@ -650,6 +650,31 @@ function final_verification() {
     log_error_and_exit "Portal certificate issuance failed."
     fi
 
+    # [ADD START] wait for provisioner gateway backend readiness and TLS secret presence
+    log_info "Waiting for provisioner-gateway Deployment rollout..."
+    if ! run_with_retry "kubectl -n provisioner rollout status deploy/provisioner-gateway --timeout=60s" "provisioner-gateway rollout to complete" 240 10; then
+    kubectl -n provisioner describe deploy provisioner-gateway || true
+    kubectl -n provisioner get pods -o wide || true
+    log_error_and_exit "provisioner-gateway failed to roll out."
+    fi
+
+    log_info "Waiting for Service/provisioner-gateway endpoints to be populated..."
+    if ! run_with_retry "kubectl -n provisioner get endpoints provisioner-gateway -o jsonpath='{.subsets[0].addresses[0].ip}' | grep -E '.+'" "provisioner-gateway Endpoints to be Ready" 240 10; then
+    kubectl -n provisioner get endpoints provisioner-gateway -o yaml || true
+    log_error_and_exit "provisioner-gateway Endpoints not ready."
+    fi
+
+    log_info "Verifying TLS Secret 'portal-tls-staging' exists for Traefik..."
+    if ! run_with_retry "kubectl -n provisioner get secret portal-tls-staging >/dev/null 2>&1" "Secret portal-tls-staging available" 180 10; then
+    kubectl -n provisioner get secret || true
+    log_error_and_exit "TLS Secret 'portal-tls-staging' is missing."
+    fi
+
+    # Give Traefik a short window to pick up the secret and router
+    log_info "Allowing Traefik to resync TLS assets..."
+    sleep 10
+    # [ADD END]
+
     log_info "Performing reachability check on Portal URL: https://${PORTAL_FQDN}"
     # 以 200/3xx 为成功（echo-server 默认 200）
     if ! run_with_retry "curl -k -s -o /dev/null -w '%{http_code}' --resolve ${PORTAL_FQDN}:443:${VPS_IP} https://${PORTAL_FQDN}/ | egrep -q '^(200|30[12])$'" "Provisioner portal to be reachable (HTTP 200/30x)" 180 10; then

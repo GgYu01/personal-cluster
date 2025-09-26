@@ -1,14 +1,17 @@
-# [ADD START] certificate for portal.core01.prod.gglohh.top
+# 修改范围：在 metadata 增加 Argo CD 同步波次注解（证书先于 IngressRoute）
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: portal-tls-staging
   namespace: provisioner
+  annotations:
+    # [ADD START] ensure cert before ingress
+    argocd.argoproj.io/sync-wave: "0"
+    # [ADD END]
 spec:
   secretName: portal-tls-staging
   issuerRef:
-    name: cloudflare-staging   # ClusterIssuer
+    name: cloudflare-staging
     kind: ClusterIssuer
   dnsNames:
   - portal.core01.prod.gglohh.top
-# [ADD END]
