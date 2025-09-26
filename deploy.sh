@@ -51,6 +51,7 @@ readonly TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 readonly LOG_FILE_NAME="deployment-bootstrap-${TIMESTAMP}.log"
 readonly LOG_FILE="$(pwd)/${LOG_FILE_NAME}"
 readonly ARGOCD_FQDN="argocd.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
+readonly PORTAL_FQDN="portal.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"  # portal.core01.prod.gglohh.top
 readonly KUBELET_CONFIG_PATH="/etc/rancher/k3s/kubelet.config"
 
 # --- [START OF PASSWORD FIX] ---
@@ -576,6 +577,10 @@ function deploy_applications() {
     kubectl apply -f kubernetes/apps/core-manifests-app.yaml
     # 新增两个静态 ingress 应用
     kubectl apply -f kubernetes/apps/argocd-ingress-app.yaml
+
+    # 新增：provisioner 网关 Application
+    kubectl apply -f kubernetes/apps/provisioner-app.yaml
+
     kubectl apply -f kubernetes/apps/authentik-ingress-static-app.yaml
 
     # 逐个等待 Healthy（放宽超时以适应首次签发/拉起）
@@ -590,6 +595,16 @@ function deploy_applications() {
     kubectl get application/argocd-ingress -n argocd -o yaml || true
     log_error_and_exit "argocd-ingress not Healthy."
     fi
+
+    # 等待 provisioner Healthy（证书/Ingress 创建可能略慢，放宽超时）
+    log_info "Waiting for provisioner application to become Healthy..."
+    if ! run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 600 10; then
+    kubectl get application/provisioner -n argocd -o yaml || true
+    kubectl -n provisioner get pods -o wide || true
+    kubectl -n provisioner get events --sort-by=.lastTimestamp | tail -n 50 || true
+    log_error_and_exit "provisioner not Healthy."
+    fi
+    log_success "provisioner application is Healthy."
 
     log_info "Waiting for authentik-ingress-static application to become Healthy..."
     if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 600 10; then
@@ -627,6 +642,22 @@ function final_verification() {
         kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server
         log_error_and_exit "End-to-end verification failed."
     fi
+
+    log_info "Verifying Provisioner portal Certificate has been issued..."
+    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/portal-tls-staging -n provisioner --timeout=5m" "Portal Certificate to be Ready" 300 15; then
+    kubectl -n provisioner describe certificate portal-tls-staging || true
+    kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=100 || true
+    log_error_and_exit "Portal certificate issuance failed."
+    fi
+
+    log_info "Performing reachability check on Portal URL: https://${PORTAL_FQDN}"
+    # 以 200/3xx 为成功（echo-server 默认 200）
+    if ! run_with_retry "curl -k -s -o /dev/null -w '%{http_code}' --resolve ${PORTAL_FQDN}:443:${VPS_IP} https://${PORTAL_FQDN}/ | egrep -q '^(200|30[12])$'" "Provisioner portal to be reachable (HTTP 200/30x)" 180 10; then
+    kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=120 || true
+    kubectl -n provisioner logs deploy/provisioner-gateway --tail=200 || true
+    log_error_and_exit "Portal end-to-end verification failed."
+    fi
+    log_success "Portal is reachable with valid TLS."
 
     # --- New: frps entryPoint + wildcard TLS verification ---
     verify_frps_entrypoint_and_tls

@@ -1,4 +1,4 @@
-# [ADD START] 占位：Provisioner 网关（可用极简容器/自研服务替换）
+# 修改范围：整段 container 配置（替换镜像为可公开拉取的 echo-server）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,11 +16,15 @@ spec:
     spec:
       containers:
       - name: gateway
-        image: ghcr.io/example/provisioner-gateway:latest  # 占位镜像，后续替换
+        image: ealen/echo-server:latest
+        imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 8080
-        # 需要实现的最小 API（约定）：
-        #   POST /api/v1/session/bootstrap
-        #     入参：shareToken, serial
-        #     出参：{ subdomainLabel: "e-<rand>-<serial>", fqdn: "e-xxx.core01...", frps:{addr, bindPort, quicPort, token}, local:{ip, port} }
-# [ADD END]
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 2
+          periodSeconds: 5
+          timeoutSeconds: 2
+          failureThreshold: 3

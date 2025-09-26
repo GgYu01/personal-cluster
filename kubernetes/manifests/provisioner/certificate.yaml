@@ -1,0 +1,14 @@
+# [ADD START] certificate for portal.core01.prod.gglohh.top
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: portal-tls-staging
+  namespace: provisioner
+spec:
+  secretName: portal-tls-staging
+  issuerRef:
+    name: cloudflare-staging   # ClusterIssuer
+    kind: ClusterIssuer
+  dnsNames:
+  - portal.core01.prod.gglohh.top
+# [ADD END]

@@ -1,4 +1,4 @@
-# [ADD START] 网关统一域名：portal.core01.prod.gglohh.top
+# 修改范围：仅确认 tls.secretName 指向本命名空间的 portal-tls-staging
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -8,11 +8,10 @@ spec:
   entryPoints:
     - websecure
   routes:
-  - match: Host(`portal.core01.prod.gglohh.top`) && (PathPrefix(`/`) || PathPrefix(`/api`))
+  - match: Host(`portal.core01.prod.gglohh.top`) && PathPrefix(`/`)
     kind: Rule
     services:
     - name: provisioner-gateway
       port: 80
   tls:
-    secretName: wildcard-core01-prod-gglohh-top-tls
-# [ADD END]
+    secretName: portal-tls-staging  # must exist in namespace 'provisioner'
