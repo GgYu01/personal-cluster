@@ -330,6 +330,39 @@ diagnose_k3s_failure() {
       | awk '!seen[$0]++' \
       | tail -n 200
 
+    # Kubernetes-level diagnostics (if apiserver is reachable)
+    if command -v kubectl >/dev/null 2>&1; then
+      echo "--- [kube] nodes (wide) ---"
+      kubectl get nodes -o wide 2>/dev/null || true
+
+      local node_name
+      node_name="$(hostname | tr '[:upper:]' '[:lower:]')"
+      echo "--- [kube] node conditions (${node_name}) ---"
+      kubectl get node "${node_name}" -o json 2>/dev/null | jq '.status.conditions // []' 2>/dev/null || true
+
+      echo "--- [kube-system] pods (wide) ---"
+      kubectl -n kube-system get pods -o wide 2>/dev/null || true
+
+      echo "--- [kube-system] helm jobs logs (traefik) ---"
+      # helm-install-traefik-crd
+      if kubectl -n kube-system get job helm-install-traefik-crd >/dev/null 2>&1; then
+        echo "----- logs: job/helm-install-traefik-crd (container: helm, tail: 120) -----"
+        kubectl -n kube-system logs job/helm-install-traefik-crd -c helm --tail=120 2>/dev/null | awk '!seen[$0]++' || true
+      fi
+      # helm-install-traefik
+      if kubectl -n kube-system get job helm-install-traefik >/dev/null 2>&1; then
+        echo "----- logs: job/helm-install-traefik (container: helm, tail: 120) -----"
+        kubectl -n kube-system logs job/helm-install-traefik -c helm --tail=120 2>/dev/null | awk '!seen[$0]++' || true
+      fi
+
+      echo "--- [kube-system] HelmChart/HelmChartConfig (traefik) ---"
+      kubectl -n kube-system get helmchart traefik -o yaml 2>/dev/null | sed -n '1,200p' || true
+      kubectl -n kube-system get helmchartconfig traefik -o yaml 2>/dev/null | sed -n '1,200p' || true
+
+      echo "--- [kube-system] recent events (tail 60) ---"
+      kubectl -n kube-system get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 60 || true
+    fi
+
     echo "--- [k3s generated files] ---"
     ls -l /etc/rancher/k3s /var/lib/rancher/k3s 2>/dev/null || true
     if [[ -f "${KUBECONFIG_PATH}" ]]; then
@@ -484,7 +517,6 @@ EOF
         sh -s - server \
           --cluster-init \
           --tls-san='${VPS_IP}' \
-          --flannel-backend=host-gw \
           --kubelet-arg='config=${KUBELET_CONFIG_PATH}'"
     if ! bash -lc "${install_cmd}"; then
         log_warn "K3s installer returned non-zero. Running diagnostics once..."
