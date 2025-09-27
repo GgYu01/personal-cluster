@@ -63,6 +63,9 @@ readonly ARGOCD_ADMIN_PASSWORD_HASH='$2a$10$Xx3c/ILSzwZfp2wHhoPxFOwH4yFp3MepBtoZ
 # [NEW] One-shot diagnostics flag to avoid duplicate heavy logs
 K3S_DIAG_DONE=0
 
+# [NEW] K3s journal anchor; collect logs only since this timestamp
+K3S_JOURNAL_ANCHOR=""
+
 # --- [NEW - SECTION 2.1: Cloudflare DNS Helpers] --- 
 # Purpose: Manage wildcard A record state-driven via CF API (idempotent, non-interactive). 
 cf_api() { 
@@ -280,7 +283,7 @@ diagnose_traefik_install() {
 
 # [NEW] One-shot K3s failure diagnostics (deep, no loops, rate-limited by flag)
 diagnose_k3s_failure() {
-    # $1: stage hint, e.g., post-install | node-not-ready
+    # $1: stage hint, e.g., post-install | node-not-ready | installer-error
     local stage="${1:-unknown}"
     if [[ "${K3S_DIAG_DONE}" == "1" ]]; then
         log_info "K3s diagnostics already collected earlier; skip duplicate collection."
@@ -320,12 +323,12 @@ diagnose_k3s_failure() {
     echo "--- [k3s service status] ---"
     systemctl status k3s.service --no-pager 2>/dev/null || true
 
-    echo "--- [journals] k3s last 400 lines ---"
-    journalctl -u k3s.service --no-pager -n 400 -o short-iso 2>/dev/null || true
-
-    echo "--- [journals] kubelet/kube-apiserver (if any) ---"
-    journalctl -xu kubelet --no-pager -n 120 -o short-iso 2>/dev/null || true
-    journalctl -xu kube-apiserver --no-pager -n 120 -o short-iso 2>/dev/null || true
+    echo "--- [journals] k3s (anchored, unique, last 200) ---"
+    # Only logs since current run; de-duplicate identical lines; bound length
+    local since_arg="${K3S_JOURNAL_ANCHOR:-"15 min ago"}"
+    journalctl -u k3s.service --since "${since_arg}" --no-pager -o short-iso 2>/dev/null \
+      | awk '!seen[$0]++' \
+      | tail -n 200
 
     echo "--- [k3s generated files] ---"
     ls -l /etc/rancher/k3s /var/lib/rancher/k3s 2>/dev/null || true
@@ -333,10 +336,6 @@ diagnose_k3s_failure() {
         echo "----- kubeconfig head -----"
         head -n 25 "${KUBECONFIG_PATH}" 2>/dev/null || true
     fi
-
-    echo "--- [etcd connectivity] etcdctl status & HTTP health ---"
-    docker exec "${ETCD_CONTAINER_NAME}" env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint status --write-out=table 2>/dev/null || true
-    curl -fsS http://127.0.0.1:2379/health 2>/dev/null || true
 
     echo "--- [process list] k3s ---"
     ps -o pid,ppid,cmd -C k3s 2>/dev/null || pgrep -a k3s 2>/dev/null || true
@@ -429,6 +428,9 @@ function deploy_etcd() {
 function install_k3s() { 
     log_step 3 "Install and Verify K3S" 
 
+    # Anchor K3s journal timestamp to avoid dumping historical logs
+    K3S_JOURNAL_ANCHOR="$(date -u --iso-8601=seconds)"
+
     log_info "Preparing K3s manifest and configuration directories..." 
     mkdir -p /var/lib/rancher/k3s/server/manifests
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")" 
@@ -476,11 +478,11 @@ EOF
     log_success "K3s customization manifests created." 
 
     log_info "Installing K3s ${K3S_VERSION}..."
-    # Build single shell pipeline; do not quote the pipe; enable pipefail inside subshell
+    # Embedded etcd: use --cluster-init on the first (single) server; no external datastore flag
     local install_cmd="set -o pipefail; curl -sfL https://get.k3s.io \
       | INSTALL_K3S_VERSION='${K3S_VERSION}' K3S_TOKEN='${K3S_CLUSTER_TOKEN}' \
         sh -s - server \
-          --datastore-endpoint='etcd://127.0.0.1:2379' \
+          --cluster-init \
           --tls-san='${VPS_IP}' \
           --flannel-backend=host-gw \
           --kubelet-arg='config=${KUBELET_CONFIG_PATH}'"
@@ -797,21 +799,20 @@ function final_verification() {
 main() { 
     # Pre-flight checks
     if [[ $EUID -ne 0 ]]; then log_error_and_exit "This script must be run as root."; fi
-    if ! command -v docker &> /dev/null || ! systemctl is-active --quiet docker; then log_error_and_exit "Docker is not installed or not running."; fi
+    if ! command -v docker &> /dev/null \vert{}\vert{} ! systemctl is-active --quiet docker; then log_error_and_exit "Docker is not installed or not running."; fi
     if ! command -v helm &> /dev/null; then log_error_and_exit "Helm is not installed. Please install Helm to proceed."; fi
     if ! command -v jq &> /dev/null; then log_error_and_exit "Command 'jq' is required but not found."; fi
     if ! command -v dig &> /dev/null; then log_error_and_exit "Command 'dig' is required but not found."; fi
 
-    if [ ! -d "kubernetes/bootstrap" ] || [ ! -d "kubernetes/apps" ]; then log_error_and_exit "Required directories 'kubernetes/bootstrap' and 'kubernetes/apps' not found. Run from repo root."; fi
+    if [ ! -d "kubernetes/bootstrap" ] \vert{}\vert{} [ ! -d "kubernetes/apps" ]; then log_error_and_exit "Required directories 'kubernetes/bootstrap' and 'kubernetes/apps' not found. Run from repo root."; fi
     
-    touch "${LOG_FILE}" &>/dev/null || { echo "FATAL ERROR: Cannot write to log file at ${LOG_FILE}." >&2; exit 1; }
-    exec &> >(tee -a "$LOG_FILE")
+    touch "${LOG_FILE}" &>/dev/null || { echo "FATAL ERROR: Cannot write to log file at ${LOG_FILE}." >&2; exit 1; } 
+    exec &> >(tee -a "$LOG_FILE") 
 
-    log_info "Deployment Bootstrapper (v23.1) initiated. Full log: ${LOG_FILE}"
+    log_info "Deployment Bootstrapper (v23.1) initiated. Full log: ${LOG_FILE}" 
 
     ensure_cloudflare_wildcard_a
     perform_system_cleanup
-    deploy_etcd
     install_k3s
     bootstrap_gitops
     deploy_applications
