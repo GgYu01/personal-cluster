@@ -433,39 +433,39 @@ function install_k3s() {
     mkdir -p /var/lib/rancher/k3s/server/manifests
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")" 
 
-  log_info "Creating Traefik HelmChartConfig with CRD provider and frps (7000/TCP) entryPoint..." 
-  cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF' 
+    log_info "Creating Traefik HelmChartConfig with CRD provider and frps (7000/TCP) entryPoint..." 
+    cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
-metadata: 
+metadata:
   name: traefik
   namespace: kube-system
-spec: 
-  valuesContent: \vert{}- 
-    providers: 
-      kubernetesCRD: 
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesCRD:
         enabled: true
-      kubernetesIngress: 
-        publishedService: 
+      kubernetesIngress:
+        publishedService:
           enabled: true
 
-    ports: 
-      web: 
+    ports:
+      web:
         port: 8000
         exposedPort: 80
         expose: true
-      websecure: 
+      websecure:
         port: 8443
         exposedPort: 443
         expose: true
-      frps: 
+      frps:
         port: 7000
         exposedPort: 7000
         protocol: TCP
         expose: true
 
-    additionalArguments: 
-      - "--entrypoints.websecure.http.tls=true" 
+    additionalArguments:
+      - "--entrypoints.websecure.http.tls=true"
 EOF
 
     cat > "${KUBELET_CONFIG_PATH}" << EOF
@@ -475,22 +475,23 @@ failSwapOn: false
 EOF
     log_success "K3s customization manifests created." 
 
-    log_info "Installing K3s ${K3S_VERSION}..." 
-    local install_cmd=( 
-        "curl -sfL https://get.k3s.io \vert{}" 
-        "INSTALL_K3S_VERSION='${K3S_VERSION}'" 
-        "K3S_TOKEN='${K3S_CLUSTER_TOKEN}'" 
-        "sh -s - server" 
-        # --cluster-init is only for embedded etcd; remove it for external etcd
-        "--datastore-endpoint='etcd://127.0.0.1:2379'" 
-        "--tls-san='${VPS_IP}'" 
-        "--flannel-backend=host-gw" 
-        "--kubelet-arg='config=${KUBELET_CONFIG_PATH}'" 
-    ) 
-    eval "${install_cmd[*]}" 
+    log_info "Installing K3s ${K3S_VERSION}..."
+    # Build single shell pipeline; do not quote the pipe; enable pipefail inside subshell
+    local install_cmd="set -o pipefail; curl -sfL https://get.k3s.io \
+      | INSTALL_K3S_VERSION='${K3S_VERSION}' K3S_TOKEN='${K3S_CLUSTER_TOKEN}' \
+        sh -s - server \
+          --datastore-endpoint='etcd://127.0.0.1:2379' \
+          --tls-san='${VPS_IP}' \
+          --flannel-backend=host-gw \
+          --kubelet-arg='config=${KUBELET_CONFIG_PATH}'"
+    if ! bash -lc "${install_cmd}"; then
+        log_warn "K3s installer returned non-zero. Running diagnostics once..."
+        diagnose_k3s_failure "installer-error"
+        log_error_and_exit "K3s installer failed."
+    fi
     log_success "K3s installation script finished." 
 
-    # [NEW] Gate immediately on systemd active state to catch early failures
+    # Gate immediately on systemd active state to catch early failures
     log_info "Checking k3s.service active state after install..."
     if ! systemctl is-active --quiet k3s; then
         log_warn "k3s.service is not active (failed). Running diagnostics once..."
@@ -504,48 +505,47 @@ EOF
     chown "$(id -u):$(id -g)" "${USER_KUBECONFIG_PATH}" 
     export KUBECONFIG="${USER_KUBECONFIG_PATH}" 
 
-    if ! run_with_retry "kubectl get node $(hostname \vert{} tr '[:upper:]' '[:lower:]') --no-headers \vert{} awk '{print \$2}' | grep -q 'Ready'" "K3s node to be Ready" 180; then
-        # [NEW] One-shot deep diagnostics (no repeated spam)
+    if ! run_with_retry "kubectl get node $(hostname | tr '[:upper:]' '[:lower:]') --no-headers | awk '{print \$2}' \vert{} grep -q 'Ready'" "K3s node to be Ready" 180; then
         diagnose_k3s_failure "node-not-ready"
-        log_error_and_exit "K3s cluster verification failed." 
+        log_error_and_exit "K3s cluster verification failed."
     fi
 
     # Wait for k3s HelmChart resources
     log_info "Waiting for HelmChart 'traefik' to appear..." 
     if ! run_with_retry "kubectl -n kube-system get helmchart traefik >/dev/null 2>&1" "HelmChart/traefik exists" 240 5; then
-        log_error_and_exit "HelmChart 'traefik' not found; Traefik installation not started." 
+        log_error_and_exit "HelmChart 'traefik' not found; Traefik installation not started."
     fi
     log_success "HelmChart/traefik detected." 
 
     log_info "Waiting for job/helm-install-traefik-crd to succeed..." 
     if ! wait_helm_job_success "kube-system" "helm-install-traefik-crd" 360; then
-        log_error_and_exit "job/helm-install-traefik-crd failed." 
+        log_error_and_exit "job/helm-install-traefik-crd failed."
     fi
     wait_for_traefik_crds
 
     log_info "Waiting for job/helm-install-traefik to succeed..." 
     if ! wait_helm_job_success "kube-system" "helm-install-traefik" 600; then
-        log_error_and_exit "job/helm-install-traefik failed." 
+        log_error_and_exit "job/helm-install-traefik failed."
     fi
 
     log_info "Waiting for Traefik Deployment to be created..." 
     if ! run_with_retry "kubectl -n kube-system get deploy traefik >/dev/null 2>&1" "Deployment/traefik exists" 240 5; then
-        log_error_and_exit "Traefik Deployment not created." 
+        log_error_and_exit "Traefik Deployment not created."
     fi
     log_info "Waiting for Traefik Deployment rollout..." 
     if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=90s" "Traefik Deployment rollout" 480 10; then
-        log_error_and_exit "Traefik Deployment failed to roll out." 
+        log_error_and_exit "Traefik Deployment failed to roll out."
     fi
     log_success "Traefik Deployment is Ready." 
 
     log_info "Checking Service/traefik exposes required ports (80, 443, 7000)..." 
-    local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '" 
-    if ! run_with_retry "${ports_cmd} \vert{} grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} \vert{} grep -Eq '\b7000\b'" "Service/traefik to expose 80,443,7000" 300 10; then
-        echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)" 
+    local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' \vert{} tr ' ' '\n' \vert{} sort -n \vert{} tr '\n' ' '"
+    if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} \vert{} grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b7000\b'" "Service/traefik to expose 80,443,7000" 300 10; then
+        echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
         diagnose_traefik_values_merge
-        log_error_and_exit "Traefik Service does not expose required ports." 
+        log_error_and_exit "Traefik Service does not expose required ports."
     fi
-    log_success "Traefik Service exposes 80/443/7000." 
+    log_success "Traefik Service exposes 80/443/7000."
 }
 
 # --- New: verify frps entryPoint & wildcard TLS readiness ---
