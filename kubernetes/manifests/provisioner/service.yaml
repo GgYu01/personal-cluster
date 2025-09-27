@@ -1,14 +1,12 @@
-# [ADD START]
 apiVersion: v1
 kind: Service
-metadata:
+metadata: 
   name: provisioner-gateway
   namespace: provisioner
-spec:
-  selector:
+spec: 
+  selector: 
     app: provisioner-gateway
-  ports:
+  ports: 
   - name: http
     port: 80
-    targetPort: 8080
-# [ADD END]
+    targetPort: 80

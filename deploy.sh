@@ -60,33 +60,34 @@ readonly KUBELET_CONFIG_PATH="/etc/rancher/k3s/kubelet.config"
 readonly ARGOCD_ADMIN_PASSWORD_HASH='$2a$10$Xx3c/ILSzwZfp2wHhoPxFOwH4yFp3MepBtoZpR2JgTsPaG6dz1EYS'
 # --- [END OF PASSWORD FIX] ---
 
-# --- [NEW - SECTION 2.1: Cloudflare DNS Helpers] ---
-# Purpose: Manage wildcard A record state-driven via CF API (idempotent, non-interactive).
-cf_api() {
-  # $1: method, $2: path, $3: data (optional)
-  local method="$1"; local path="$2"; local data="${3:-}"
+# --- [NEW - SECTION 2.1: Cloudflare DNS Helpers] --- 
+# Purpose: Manage wildcard A record state-driven via CF API (idempotent, non-interactive). 
+cf_api() { 
+  # $1: method, $2: path, $3: data (optional) 
+  local method="$1"; local path="$2"; local data="${3:-}" 
+  local url="https://api.cloudflare.com/client/v4${path}"
   if [[ -n "$data" ]]; then
-    curl -sS -X "${method}" "https://api.cloudflare.com/client/v4${path}" \
+    curl -sS -X "${method}" "${url}" \
       -H "Authorization: Bearer ${CF_API_TOKEN}" \
       -H "Content-Type: application/json" \
       --data-raw "${data}"
   else
-    curl -sS -X "${method}" "https://api.cloudflare.com/client/v4${path}" \
+    curl -sS -X "${method}" "${url}" \
       -H "Authorization: Bearer ${CF_API_TOKEN}" \
       -H "Content-Type: application/json"
   fi
-}
+} 
 
-wait_apiserver_ready() {
-  # $1 timeout seconds (default 180), $2 interval seconds (default 5)
-  local timeout_s="${1:-180}"
-  local interval_s="${2:-5}"
-  log_info "Checking Kubernetes apiserver readiness (/readyz) with timeout ${timeout_s}s..."
+wait_apiserver_ready() { 
+  # $1 timeout seconds (default 180), $2 interval seconds (default 5) 
+  local timeout_s="${1:-180}" 
+  local interval_s="${2:-5}" 
+  log_info "Checking Kubernetes apiserver readiness (/readyz) with timeout ${timeout_s}s..." 
   if ! timeout "${timeout_s}s" bash -lc \
     'until kubectl --request-timeout=10s get --raw=/readyz >/dev/null 2>&1; do echo "    ...apiserver not ready yet"; sleep '"${interval_s}"'; done'; then
-    log_error_and_exit "Kubernetes apiserver is not ready within ${timeout_s}s."
+    log_error_and_exit "Kubernetes apiserver is not ready within ${timeout_s}s." 
   fi
-  log_success "Kubernetes apiserver reports Ready."
+  log_success "Kubernetes apiserver reports Ready." 
 }
 
 ensure_cloudflare_wildcard_a() {
@@ -105,16 +106,15 @@ ensure_cloudflare_wildcard_a() {
 
   log_info "Checking existing DNS record for ${sub_wildcard} (type A) ..."
   # URL-encode "*." as %2A.
-  local qname; qname="%2A.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
-  local rec_resp; rec_resp=$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=${qname}")
-  local rec_id; rec_id=$(echo "${rec_resp}" | jq -r '.result[0].id // empty')
-  local rec_ip; rec_ip=$(echo "${rec_resp}" | jq -r '.result[0].content // empty')
+  local rec_resp; rec_resp=$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=*.$SITE_CODE.$ENVIRONMENT.$DOMAIN_NAME") 
+  local rec_id; rec_id=$(echo "${rec_resp}" | jq -r '.result[0].id // empty') 
+  local rec_ip; rec_ip=$(echo "${rec_resp}" | jq -r '.result[0].content // empty') 
 
   if [[ -n "${rec_id}" ]]; then
     if [[ "${rec_ip}" == "${VPS_IP}" ]]; then
-      log_success "Wildcard A already correct: ${sub_wildcard} -> ${VPS_IP} (no action)."
+      log_success "Wildcard A already correct: ${sub_wildcard} -> ${VPS_IP} (no action)." 
     else
-      log_info "Updating wildcard A to ${VPS_IP} ..."
+      log_info "Updating wildcard A to ${VPS_IP} ..." 
       local payload; payload=$(jq -nc --arg name "${sub_wildcard}" --arg ip "${VPS_IP}" --argjson proxied ${CF_PROXIED} \
         '{type:"A", name:$name, content:$ip, ttl:1, proxied:$proxied}')
       local up_resp; up_resp=$(cf_api PUT "/zones/${zone_id}/dns_records/${rec_id}" "${payload}")
@@ -277,47 +277,52 @@ function perform_system_cleanup() {
         log_warn "Docker not running or not installed. Skipping Docker resource cleanup."
     fi
     
-    log_info "Running K3s uninstaller and cleaning up filesystem..."
+    log_info "Running K3s uninstaller and cleaning up filesystem..." 
     if [ -x /usr/local/bin/k3s-uninstall.sh ]; then
         /usr/local/bin/k3s-uninstall.sh &>/dev/null
     fi
-    rm -rf /var/lib/rancher/k3s /etc/rancher /var/lib/kubelet /run/flannel /run/containerd /var/lib/containerd /tmp/k3s-*
-    rm -rf "${ETCD_DATA_DIR}"
-    rm -f /etc/systemd/system/k3s.service /etc/systemd/system/k3s.service.env "${KUBELET_CONFIG_PATH}" "${KUBECONFIG_PATH}"
-    rm -rf "${HOME}/.kube"
+    # Keep non-k3s containerd paths intact to avoid breaking other Docker services
+    rm -rf /var/lib/rancher/k3s /etc/rancher /var/lib/kubelet /run/flannel /tmp/k3s-*
+    rm -rf "${ETCD_DATA_DIR}" 
+    rm -f /etc/systemd/system/k3s.service /etc/systemd/system/k3s.service.env "${KUBELET_CONFIG_PATH}" "${KUBECONFIG_PATH}" 
+    rm -rf "${HOME}/.kube" 
 
-    log_info "Reloading systemd and cleaning journals for k3s and docker..."
+    log_info "Reloading systemd and cleaning journals for k3s and docker..." 
     systemctl daemon-reload
-    # --- [MODIFY START] targeted journal handling (do not vacuum unrelated logs) ---
-    log_info "Rotating systemd journal only (no global vacuum; keep unrelated services' logs)..."
     journalctl --rotate || true
     # --- [MODIFY END] ---
     
     log_success "System cleanup complete."
 }
 
-function deploy_etcd() {
-    log_step 2 "Deploy and Verify External ETCD"
+function deploy_etcd() { 
+    log_step 2 "Deploy and Verify External ETCD" 
     
-    log_info "Preparing ETCD data directory with correct permissions for UID ${ETCD_CONTAINER_USER_ID}..."
-    mkdir -p "${ETCD_DATA_DIR}"
-    chown -R "${ETCD_CONTAINER_USER_ID}:${ETCD_CONTAINER_USER_ID}" "${ETCD_DATA_DIR}"
+    log_info "Preparing ETCD data directory with correct permissions for UID ${ETCD_CONTAINER_USER_ID}..." 
+    mkdir -p "${ETCD_DATA_DIR}" 
+    chown -R "${ETCD_CONTAINER_USER_ID}:${ETCD_CONTAINER_USER_ID}" "${ETCD_DATA_DIR}" 
     
-    log_info "Deploying ETCD via Docker..."
+    log_info "Deploying ETCD via Docker..." 
     docker run -d --restart unless-stopped \
+      --name "${ETCD_CONTAINER_NAME}" \
       -p 127.0.0.1:2379:2379 \
       -v "${ETCD_DATA_DIR}":/bitnami/etcd/data \
-      --name "${ETCD_CONTAINER_NAME}" \
-      -e ALLOW_NONE_AUTHENTICATION=yes \
+      -e ETCD_NAME="${ETCD_CONTAINER_NAME}" \
+      -e ETCD_ENABLE_V2="false" \
+      -e ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379" \
+      -e ETCD_ADVERTISE_CLIENT_URLS="http://127.0.0.1:2379" \
+      -e ALLOW_NONE_AUTHENTICATION="yes" \
       bitnami/etcd:latest >/dev/null
       
-    log_success "ETCD container started."
+    log_success "ETCD container started." 
 
-    if ! run_with_retry "curl --fail --silent http://127.0.0.1:2379/health" "ETCD to be healthy" 60 5; then
-        log_info "ETCD health check failed. Dumping container logs for diagnosis:"
-        docker logs "${ETCD_CONTAINER_NAME}"
-        log_error_and_exit "ETCD deployment failed."
+    log_info "Waiting for ETCD endpoint health (v3 gRPC)..." 
+    if ! timeout 120 bash -lc 'until docker exec '"${ETCD_CONTAINER_NAME}"' env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint health >/dev/null 2>&1; do echo "    ...waiting etcd..."; sleep 3; done'; then
+        log_info "ETCD health check failed. Dumping container logs for diagnosis:" 
+        docker logs --tail=200 "${ETCD_CONTAINER_NAME}"
+        log_error_and_exit "ETCD deployment failed." 
     fi
+    log_success "ETCD endpoint is healthy." 
 }
 
 function install_k3s() {
@@ -328,44 +333,38 @@ function install_k3s() {
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")"
 
   log_info "Creating Traefik HelmChartConfig with CRD provider and frps (7000/TCP) entryPoint..."
-  cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF'
+  cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF' 
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
-metadata:
+metadata: 
   name: traefik
   namespace: kube-system
-spec:
-  valuesContent: |-
-    # 启用 CRD/Ingress 两类 provider，并让 Ingress 使用已发布的服务做状态回填
-    providers:
-      kubernetesCRD:
+spec: 
+  valuesContent: |- 
+    providers: 
+      kubernetesCRD: 
         enabled: true
-      kubernetesIngress:
-        publishedService:
+      kubernetesIngress: 
+        publishedService: 
           enabled: true
 
-    # 正确的入口点定义（每个入口点内使用 expose.default）
-    ports:
-      web:
+    ports: 
+      web: 
         port: 8000
         exposedPort: 80
-        expose:
-          default: true
-      websecure:
+        expose: true
+      websecure: 
         port: 8443
         exposedPort: 443
-        expose:
-          default: true
-      frps:
+        expose: true
+      frps: 
         port: 7000
         exposedPort: 7000
         protocol: TCP
-        expose:
-          default: true
+        expose: true
 
-    # 为 websecure 显式启用 TLS（由 IngressRoute/Certificate 控制证书）
-    additionalArguments:
-      - "--entrypoints.websecure.http.tls=true"
+    additionalArguments: 
+      - "--entrypoints.websecure.http.tls=true" 
 EOF
 
     cat > "${KUBELET_CONFIG_PATH}" << EOF
@@ -376,17 +375,17 @@ EOF
     log_success "K3s customization manifests created."
 
     log_info "Installing K3s ${K3S_VERSION}..."
-    local install_cmd=(
-        "curl -sfL https://get.k3s.io |"
-        "INSTALL_K3S_VERSION='${K3S_VERSION}'"
-        "K3S_TOKEN='${K3S_CLUSTER_TOKEN}'"
-        "sh -s - server"
-        "--cluster-init"
-        "--datastore-endpoint='http://127.0.0.1:2379'"
-        "--tls-san='${VPS_IP}'"
-        "--flannel-backend=host-gw"
-        "--kubelet-arg='config=${KUBELET_CONFIG_PATH}'"
-    )
+    local install_cmd=( 
+        "curl -sfL https://get.k3s.io |" 
+        "INSTALL_K3S_VERSION='${K3S_VERSION}'" 
+        "K3S_TOKEN='${K3S_CLUSTER_TOKEN}'" 
+        "sh -s - server" 
+        "--cluster-init" 
+        "--datastore-endpoint='etcd://127.0.0.1:2379'" 
+        "--tls-san='${VPS_IP}'" 
+        "--flannel-backend=host-gw" 
+        "--kubelet-arg='config=${KUBELET_CONFIG_PATH}'" 
+    ) 
     eval "${install_cmd[*]}"
     log_success "K3s installation script finished."
 
@@ -689,11 +688,14 @@ function final_verification() {
 }
 
 # --- [SECTION 4: MAIN EXECUTION] ---
-main() {
+main() { 
     # Pre-flight checks
     if [[ $EUID -ne 0 ]]; then log_error_and_exit "This script must be run as root."; fi
     if ! command -v docker &> /dev/null || ! systemctl is-active --quiet docker; then log_error_and_exit "Docker is not installed or not running."; fi
     if ! command -v helm &> /dev/null; then log_error_and_exit "Helm is not installed. Please install Helm to proceed."; fi
+    if ! command -v jq &> /dev/null; then log_error_and_exit "Command 'jq' is required but not found."; fi
+    if ! command -v dig &> /dev/null; then log_error_and_exit "Command 'dig' is required but not found."; fi
+
     if [ ! -d "kubernetes/bootstrap" ] || [ ! -d "kubernetes/apps" ]; then log_error_and_exit "Required directories 'kubernetes/bootstrap' and 'kubernetes/apps' not found. Run from repo root."; fi
     
     touch "${LOG_FILE}" &>/dev/null || { echo "FATAL ERROR: Cannot write to log file at ${LOG_FILE}." >&2; exit 1; }
