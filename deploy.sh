@@ -60,6 +60,9 @@ readonly KUBELET_CONFIG_PATH="/etc/rancher/k3s/kubelet.config"
 readonly ARGOCD_ADMIN_PASSWORD_HASH='$2a$10$Xx3c/ILSzwZfp2wHhoPxFOwH4yFp3MepBtoZpR2JgTsPaG6dz1EYS'
 # --- [END OF PASSWORD FIX] ---
 
+# [NEW] One-shot diagnostics flag to avoid duplicate heavy logs
+K3S_DIAG_DONE=0
+
 # --- [NEW - SECTION 2.1: Cloudflare DNS Helpers] --- 
 # Purpose: Manage wildcard A record state-driven via CF API (idempotent, non-interactive). 
 cf_api() { 
@@ -275,6 +278,72 @@ diagnose_traefik_install() {
     kubectl -n kube-system get events --sort-by=.lastTimestamp | tail -n 50 2>/dev/null || true
 }
 
+# [NEW] One-shot K3s failure diagnostics (deep, no loops, rate-limited by flag)
+diagnose_k3s_failure() {
+    # $1: stage hint, e.g., post-install | node-not-ready
+    local stage="${1:-unknown}"
+    if [[ "${K3S_DIAG_DONE}" == "1" ]]; then
+        log_info "K3s diagnostics already collected earlier; skip duplicate collection."
+        return 0
+    fi
+    K3S_DIAG_DONE=1
+
+    echo "==== [DIAG] K3s failure diagnostics (stage: ${stage}) ===="
+    echo "--- [sysinfo] uname/date/os ---"
+    uname -a || true
+    (lsb_release -a 2>/dev/null || cat /etc/os-release 2>/dev/null || true)
+    date -u || true
+
+    echo "--- [resources] disk/memory ---"
+    df -h || true
+    free -m || true
+
+    echo "--- [kernel params] ip_forward & bridge-nf ---"
+    sysctl -e net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables 2>/dev/null || true
+
+    echo "--- [ports] apiserver/kubelet/etcd listeners ---"
+    ss -lntp 2>/dev/null | egrep '(:6443|:10250|:2379)' || true
+
+    echo "--- [k3s binary & version] ---"
+    command -v k3s 2>/dev/null || true
+    k3s -v 2>/dev/null || true
+
+    echo "--- [systemd k3s unit] show & files ---"
+    systemctl show k3s.service -p FragmentPath,EnvironmentFile,ExecStart,ExecStartPre,ExecStartPost 2>/dev/null || true
+    echo
+    echo "----- /etc/systemd/system/k3s.service (head) -----"
+    sed -n '1,160p' /etc/systemd/system/k3s.service 2>/dev/null || true
+    echo
+    echo "----- /etc/systemd/system/k3s.service.env -----"
+    cat /etc/systemd/system/k3s.service.env 2>/dev/null || true
+
+    echo "--- [k3s service status] ---"
+    systemctl status k3s.service --no-pager 2>/dev/null || true
+
+    echo "--- [journals] k3s last 400 lines ---"
+    journalctl -u k3s.service --no-pager -n 400 -o short-iso 2>/dev/null || true
+
+    echo "--- [journals] kubelet/kube-apiserver (if any) ---"
+    journalctl -xu kubelet --no-pager -n 120 -o short-iso 2>/dev/null || true
+    journalctl -xu kube-apiserver --no-pager -n 120 -o short-iso 2>/dev/null || true
+
+    echo "--- [k3s generated files] ---"
+    ls -l /etc/rancher/k3s /var/lib/rancher/k3s 2>/dev/null || true
+    if [[ -f "${KUBECONFIG_PATH}" ]]; then
+        echo "----- kubeconfig head -----"
+        head -n 25 "${KUBECONFIG_PATH}" 2>/dev/null || true
+    fi
+
+    echo "--- [etcd connectivity] etcdctl status & HTTP health ---"
+    docker exec "${ETCD_CONTAINER_NAME}" env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint status --write-out=table 2>/dev/null || true
+    curl -fsS http://127.0.0.1:2379/health 2>/dev/null || true
+
+    echo "--- [process list] k3s ---"
+    ps -o pid,ppid,cmd -C k3s 2>/dev/null || pgrep -a k3s 2>/dev/null || true
+
+    echo "==== [DIAG END] K3s failure diagnostics ===="
+}
+
 # --- [SECTION 3: DEPLOYMENT FUNCTIONS] ---
 
 function perform_system_cleanup() {
@@ -421,6 +490,14 @@ EOF
     eval "${install_cmd[*]}"
     log_success "K3s installation script finished."
 
+    # [NEW] Gate immediately on systemd active state to catch early failures
+    log_info "Checking k3s.service active state after install..."
+    if ! systemctl is-active --quiet k3s; then
+        log_warn "k3s.service is not active (failed). Running diagnostics once..."
+        diagnose_k3s_failure "post-install"
+        log_error_and_exit "K3s service failed to start."
+    fi
+
     log_info "Setting up kubeconfig for user..."
     mkdir -p "$(dirname "${USER_KUBECONFIG_PATH}")"
     cp "${KUBECONFIG_PATH}" "${USER_KUBECONFIG_PATH}"
@@ -428,8 +505,8 @@ EOF
     export KUBECONFIG="${USER_KUBECONFIG_PATH}"
 
     if ! run_with_retry "kubectl get node $(hostname | tr '[:upper:]' '[:lower:]') --no-headers | awk '{print \$2}' | grep -q 'Ready'" "K3s node to be Ready" 180; then
-        log_info "K3s node did not become ready. Dumping K3s service logs:"
-        journalctl -u k3s.service --no-pager -n 500
+        # [NEW] One-shot deep diagnostics (no repeated spam)
+        diagnose_k3s_failure "node-not-ready"
         log_error_and_exit "K3s cluster verification failed."
     fi
 
