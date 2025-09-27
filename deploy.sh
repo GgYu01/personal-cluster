@@ -76,7 +76,7 @@ cf_api() {
       -H "Authorization: Bearer ${CF_API_TOKEN}" \
       -H "Content-Type: application/json"
   fi
-} 
+}
 
 wait_apiserver_ready() { 
   # $1 timeout seconds (default 180), $2 interval seconds (default 5) 
@@ -108,7 +108,7 @@ ensure_cloudflare_wildcard_a() {
   # URL-encode "*." as %2A.
   local rec_resp; rec_resp=$(cf_api GET "/zones/${zone_id}/dns_records?type=A&name=*.$SITE_CODE.$ENVIRONMENT.$DOMAIN_NAME") 
   local rec_id; rec_id=$(echo "${rec_resp}" | jq -r '.result[0].id // empty') 
-  local rec_ip; rec_ip=$(echo "${rec_resp}" | jq -r '.result[0].content // empty') 
+  local rec_ip; rec_ip=$(echo "${rec_resp}" | jq -r '.result[0].content // empty')
 
   if [[ -n "${rec_id}" ]]; then
     if [[ "${rec_ip}" == "${VPS_IP}" ]]; then
@@ -152,19 +152,35 @@ log_warn() { echo -e "\033[1;33m⚠️  WARN: $1\033[0m"; }
 log_success() { echo -e "\033[1;32m✅ SUCCESS:\033[0m $1"; }
 log_error_and_exit() { echo -e "\n\033[1;31m❌ FATAL ERROR:\033[0m $1" >&2; echo -e "\033[1;31mDeployment failed. See ${LOG_FILE} for full details.\033[0m" >&2; exit 1; }
 
-run_with_retry() {
-    local cmd="$1"
-    local description="$2"
-    local timeout_seconds="$3"
-    local interval_seconds="${4:-10}"
-    
-    log_info "Verifying: ${description} (Timeout: ${timeout_seconds}s)"
-    if ! timeout "${timeout_seconds}s" bash -c -- "until ${cmd} &>/dev/null; do printf '    ...waiting...\\n'; sleep ${interval_seconds}; done"; then
-        log_warn "Condition '${description}' was NOT met within the timeout period."
-        return 1
-    fi
-    log_success "Verified: ${description}."
-    return 0
+run_with_retry() { 
+    local cmd="$1" 
+    local description="$2" 
+    local timeout_seconds="$3" 
+    local interval_seconds="${4:-10}" 
+    local note_every="${5:-30}"  # print a note at most every N seconds
+
+    log_info "Verifying: ${description} (Timeout: ${timeout_seconds}s)" 
+    local start_ts now_ts elapsed next_note
+    start_ts=$(date +%s)
+    next_note=$note_every
+
+    while true; do
+        if bash -lc "${cmd}" &>/dev/null; then
+            log_success "Verified: ${description}."
+            return 0
+        fi
+        now_ts=$(date +%s)
+        elapsed=$(( now_ts - start_ts ))
+        if (( elapsed >= timeout_seconds )); then
+            log_warn "Condition '${description}' was NOT met within the timeout period."
+            return 1
+        fi
+        if (( elapsed >= next_note )); then
+            echo "    ...waiting '${description}' (elapsed: ${elapsed}s)"
+            next_note=$(( next_note + note_every ))
+        fi
+        sleep "${interval_seconds}"
+    done
 }
 
 # Single-shot job logs collector for helm jobs
@@ -290,7 +306,6 @@ function perform_system_cleanup() {
     log_info "Reloading systemd and cleaning journals for k3s and docker..." 
     systemctl daemon-reload
     journalctl --rotate || true
-    # --- [MODIFY END] ---
     
     log_success "System cleanup complete."
 }
@@ -316,13 +331,30 @@ function deploy_etcd() {
       
     log_success "ETCD container started." 
 
-    log_info "Waiting for ETCD endpoint health (v3 gRPC)..." 
-    if ! timeout 120 bash -lc 'until docker exec '"${ETCD_CONTAINER_NAME}"' env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint health >/dev/null 2>&1; do echo "    ...waiting etcd..."; sleep 3; done'; then
-        log_info "ETCD health check failed. Dumping container logs for diagnosis:" 
-        docker logs --tail=200 "${ETCD_CONTAINER_NAME}"
-        log_error_and_exit "ETCD deployment failed." 
+    # Primary check: etcdctl v3 inside container (low-noise, rate-limited progress)
+    log_info "Waiting for ETCD endpoint health via etcdctl (v3, in-container) ..."
+    if ! run_with_retry "docker exec ${ETCD_CONTAINER_NAME} env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint health" "ETCD to be healthy (etcdctl)" 300 3 30; then
+        log_warn "Primary etcdctl health check did not pass within timeout. Trying HTTP /health as fallback..."
+
+        # Fallback check: host-side HTTP /health (etcd exposes HTTP health for v3 when http listen is enabled)
+        if ! run_with_retry "curl -fsS http://127.0.0.1:2379/health | grep -qi 'true\|healthy'" "ETCD HTTP /health endpoint reports healthy" 120 5 30; then
+            # Diagnostics (one-shot, no loops)
+            echo "==== [DIAG: etcdctl availability (in-container)] ===="
+            docker exec "${ETCD_CONTAINER_NAME}" sh -lc 'command -v etcdctl >/dev/null 2>&1 && (etcdctl version || true) || echo "etcdctl not found"' 2>/dev/null || true
+            echo
+            echo "==== [DIAG: in-container ETCD_* environment] ===="
+            docker exec "${ETCD_CONTAINER_NAME}" sh -lc 'env | grep -E "^ETCD_|^ALLOW_" | sort' 2>/dev/null || true
+            echo
+            echo "==== [DIAG: last 400 lines of etcd container logs] ===="
+            docker logs --tail=400 "${ETCD_CONTAINER_NAME}" 2>/dev/null || true
+            echo
+            echo "==== [DIAG: docker inspect (ports, restart policy, state)] ===="
+            docker inspect "${ETCD_CONTAINER_NAME}" | jq '.[0] | {Name: .Name, State: .State, HostConfig: {RestartPolicy: .HostConfig.RestartPolicy}, NetworkSettings: {Ports: .NetworkSettings.Ports}}' 2>/dev/null || true
+            log_error_and_exit "ETCD deployment failed."
+        fi
     fi
-    log_success "ETCD endpoint is healthy." 
+
+    log_success "ETCD endpoint is healthy."
 }
 
 function install_k3s() {
