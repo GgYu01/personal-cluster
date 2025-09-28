@@ -488,16 +488,13 @@ spec:
       web:
         port: 8000
         exposedPort: 80
-        expose: true
       websecure:
         port: 8443
         exposedPort: 443
-        expose: true
       frps:
         port: 7000
         exposedPort: 7000
         protocol: TCP
-        expose: true
 
     additionalArguments:
       - "--entrypoints.websecure.http.tls=true"
