@@ -536,11 +536,19 @@ EOF
     chown "$(id -u):$(id -g)" "${USER_KUBECONFIG_PATH}" 
     export KUBECONFIG="${USER_KUBECONFIG_PATH}" 
 
-    log_info "Waiting for all Nodes to be Ready via kubectl wait (Timeout: 300s)..."
-    if ! kubectl wait --for=condition=Ready node --all --timeout=300s; then
-        kubectl get nodes -o wide || true
-        diagnose_k3s_failure "node-not-ready"
-        log_error_and_exit "K3s cluster verification failed."
+    log_info "Waiting for Node object to appear (Timeout: 180s)..."
+    if ! timeout 180 bash -lc 'until kubectl get nodes --no-headers 2>/dev/null | grep -q .; do echo "    ...Node list empty, waiting..."; sleep 5; done'; then
+      kubectl get nodes -o wide || true
+      diagnose_k3s_failure "node-object-missing"
+      log_error_and_exit "Node objects did not appear in time."
+    fi
+
+    # 再等 Node Ready（kubectl wait）
+    log_info "Waiting for all Nodes to be Ready via kubectl wait (Timeout: 180s)..."
+    if ! kubectl wait --for=condition=Ready node --all --timeout=180s 2>&1 | tee -a "${LOG_FILE}"; then
+      kubectl get nodes -o wide || true
+      diagnose_k3s_failure "node-not-ready"
+      log_error_and_exit "K3s cluster verification failed."
     fi
     log_success "All nodes report Ready."
 
