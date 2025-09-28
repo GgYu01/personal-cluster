@@ -434,7 +434,7 @@ function deploy_etcd() {
 
     # Primary check: etcdctl v3 inside container (low-noise, rate-limited progress)
     log_info "Waiting for ETCD endpoint health via etcdctl (v3, in-container) ..."
-    if ! run_with_retry "docker exec ${ETCD_CONTAINER_NAME} env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint health" "ETCD to be healthy (etcdctl)" 300 3 30; then
+    if ! run_with_retry "docker exec ${ETCD_CONTAINER_NAME} env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint health" "ETCD to be healthy (etcdctl)" 180 3 30; then
         log_warn "Primary etcdctl health check did not pass within timeout. Trying HTTP /health as fallback..."
 
         # Fallback check: host-side HTTP /health (etcd exposes HTTP health for v3 when http listen is enabled)
@@ -493,6 +493,8 @@ spec:
         exposedPort: 443
       frps:
         port: 7000
+        expose:
+          default: true
         exposedPort: 7000
         protocol: TCP
 
@@ -583,7 +585,7 @@ EOF
     log_info "Checking Service/traefik exposes required ports (80, 443, 7000)..."
     local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
     if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b7000\b'" \
-        "Service/traefik to expose 80,443,7000" 300 10; then
+        "Service/traefik to expose 80,443,7000" 180 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
         diagnose_traefik_values_merge
         log_error_and_exit "Traefik Service does not expose required ports."
@@ -670,7 +672,7 @@ function bootstrap_gitops() {
     kubectl apply -f kubernetes/bootstrap/argocd-app.yaml
 
     log_info "Waiting for Argo CD to sync its own application resource..."
-    if ! run_with_retry "kubectl get application/argocd -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Argo CD to become Healthy and self-managed" 300; then
+    if ! run_with_retry "kubectl get application/argocd -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Argo CD to become Healthy and self-managed" 180; then
         log_info "Argo CD self-management sync failed. Dumping application status:"
         kubectl get application/argocd -n argocd -o yaml
         log_error_and_exit "Argo CD bootstrap failed at self-management step."
@@ -687,7 +689,7 @@ function deploy_applications() {
     kubectl apply -f kubernetes/apps/cert-manager-app.yaml
 
     # 2) API server 就绪门控，避免 Admission 注册过程的瞬时失败
-    wait_apiserver_ready 300 5
+    wait_apiserver_ready 180 5
 
     # 3) 等待 cert-manager 核心 Deployment 实际就绪（比直接看 Argo Application 更贴近事实）
     log_info "Waiting for cert-manager Deployments to become Available..."
@@ -705,7 +707,7 @@ function deploy_applications() {
     log_success "cert-manager core Deployments are Available."
 
     # 4) 再做一次 apiserver 就绪门控（webhook/CRD 安装后常见波动）
-    wait_apiserver_ready 300 5
+    wait_apiserver_ready 180 5
 
     # 5) 从 Argo 视角等待 cert-manager Application Healthy（延长超时以适应首次安装）
     log_info "Waiting for Cert-Manager application to become Healthy in Argo CD..."
@@ -775,7 +777,7 @@ function final_verification() {
     fi
 
     log_info "Verifying ArgoCD IngressRoute certificate has been issued..."
-    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/argocd-server-tls-staging -n argocd --timeout=5m" "Certificate to be Ready" 300 15; then
+    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/argocd-server-tls-staging -n argocd --timeout=5m" "Certificate to be Ready" 180 15; then
         log_info "Certificate did not become ready. Dumping Cert-Manager logs and describing Certificate:"
         kubectl logs -n cert-manager -l app.kubernetes.io/instance=cert-manager --all-containers
         kubectl describe certificate -n argocd argocd-server-tls-staging
@@ -792,7 +794,7 @@ function final_verification() {
     fi
 
     log_info "Verifying Provisioner portal Certificate has been issued..."
-    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/portal-tls-staging -n provisioner --timeout=5m" "Portal Certificate to be Ready" 300 15; then
+    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/portal-tls-staging -n provisioner --timeout=5m" "Portal Certificate to be Ready" 180 15; then
     kubectl -n provisioner describe certificate portal-tls-staging || true
     kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=100 || true
     log_error_and_exit "Portal certificate issuance failed."
