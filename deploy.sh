@@ -536,10 +536,13 @@ EOF
     chown "$(id -u):$(id -g)" "${USER_KUBECONFIG_PATH}" 
     export KUBECONFIG="${USER_KUBECONFIG_PATH}" 
 
-    if ! run_with_retry "kubectl get node $(hostname | tr '[:upper:]' '[:lower:]') --no-headers | awk '{print \$2}' \vert{} grep -q 'Ready'" "K3s node to be Ready" 180; then
+    log_info "Waiting for all Nodes to be Ready via kubectl wait (Timeout: 300s)..."
+    if ! kubectl wait --for=condition=Ready node --all --timeout=300s; then
+        kubectl get nodes -o wide || true
         diagnose_k3s_failure "node-not-ready"
         log_error_and_exit "K3s cluster verification failed."
     fi
+    log_success "All nodes report Ready."
 
     # Wait for k3s HelmChart resources
     log_info "Waiting for HelmChart 'traefik' to appear..." 
@@ -569,9 +572,10 @@ EOF
     fi
     log_success "Traefik Deployment is Ready." 
 
-    log_info "Checking Service/traefik exposes required ports (80, 443, 7000)..." 
-    local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' \vert{} tr ' ' '\n' \vert{} sort -n \vert{} tr '\n' ' '"
-    if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} \vert{} grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b7000\b'" "Service/traefik to expose 80,443,7000" 300 10; then
+    log_info "Checking Service/traefik exposes required ports (80, 443, 7000)..."
+    local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
+    if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b7000\b'" \
+        "Service/traefik to expose 80,443,7000" 300 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
         diagnose_traefik_values_merge
         log_error_and_exit "Traefik Service does not expose required ports."
