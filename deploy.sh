@@ -534,9 +534,8 @@ function deploy_etcd() {
     log_success "ETCD endpoint is healthy."
 }
 
-# --- [NEW] Ensure HelmChartConfig(traefik) applied and force helm reinstall ---
-apply_traefik_config_and_redeploy() {
-  log_info "Applying HelmChartConfig traefik (explicit apply + forced reinstall)..."
+apply_traefik_config_and_redeploy() { 
+  log_info "Applying HelmChartConfig traefik (explicit apply + forced reinstall)..." 
   cat > /tmp/traefik-helmchartconfig.yaml <<EOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -555,24 +554,20 @@ spec:
     ports:
       web:
         port: 8000
-        expose:
-          default: true
+        expose: true
         exposedPort: 80
       websecure:
         port: 8443
-        expose:
-          default: true
+        expose: true
         exposedPort: 443
       frpsUi:
         port: ${FRPS_UI_BIND_PORT}
-        expose:
-          default: true
+        expose: true
         exposedPort: ${FRPS_UI_BIND_PORT}
         protocol: TCP
       frpsWs:
         port: ${FRPS_WS_BIND_PORT}
-        expose:
-          default: true
+        expose: true
         exposedPort: ${FRPS_WS_BIND_PORT}
         protocol: TCP
 
@@ -582,44 +577,44 @@ EOF
 
   kubectl -n kube-system apply -f /tmp/traefik-helmchartconfig.yaml
 
-  log_info "Deleting job/helm-install-traefik to trigger reinstall with new values..."
+  log_info "Deleting job/helm-install-traefik to trigger reinstall with new values..." 
   kubectl -n kube-system delete job helm-install-traefik --ignore-not-found
 
-  log_info "Waiting for job/helm-install-traefik to be recreated..."
+  log_info "Waiting for job/helm-install-traefik to be recreated..." 
   if ! timeout 180 bash -lc 'until kubectl -n kube-system get job helm-install-traefik >/dev/null 2>&1; do echo "    ... waiting job"; sleep 3; done'; then
     diagnose_traefik_install
-    log_error_and_exit "job/helm-install-traefik not recreated."
+    log_error_and_exit "job/helm-install-traefik not recreated." 
   fi
 
-  log_info "Waiting for job/helm-install-traefik to succeed (post-config apply)..."
+  log_info "Waiting for job/helm-install-traefik to succeed (post-config apply)..." 
   if ! wait_helm_job_success "kube-system" "helm-install-traefik" 600; then
     dump_helm_job_configs
     diagnose_traefik_install
-    log_error_and_exit "job/helm-install-traefik failed after applying HelmChartConfig."
+    log_error_and_exit "job/helm-install-traefik failed after applying HelmChartConfig." 
   fi
 
-  log_info "Waiting for Traefik deployment rollout after config applied..."
+  log_info "Waiting for Traefik deployment rollout after config applied..." 
   if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=120s" "Traefik Deployment rollout (post-config)" 480 10; then
     diagnose_traefik_install
-    log_error_and_exit "Traefik Deployment failed to roll out after applying HelmChartConfig."
+    log_error_and_exit "Traefik Deployment failed to roll out after applying HelmChartConfig." 
   fi
 
-  log_success "Traefik reinstalled with HelmChartConfig."
+  log_success "Traefik reinstalled with HelmChartConfig." 
 }
 
 function install_k3s() { 
     log_step 3 "Install and Verify K3S" 
 
     # Anchor K3s journal timestamp to avoid dumping historical logs
-    K3S_JOURNAL_ANCHOR="$(date -u --iso-8601=seconds)"
+    K3S_JOURNAL_ANCHOR="$(date -u --iso-8601=seconds)" 
 
     log_info "Preparing K3s manifest and configuration directories..." 
     mkdir -p /var/lib/rancher/k3s/server/manifests
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")" 
 
-    log_info "Creating Traefik HelmChartConfig with CRD provider and frps UI/WS entryPoints..."
+    log_info "Creating Traefik HelmChartConfig with CRD provider and frps UI/WS entryPoints..." 
     rm -f /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
-    cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF'
+    cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml <<EOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -637,24 +632,20 @@ spec:
     ports:
       web:
         port: 8000
-        expose:
-          default: true
+        expose: true
         exposedPort: 80
       websecure:
         port: 8443
-        expose:
-          default: true
+        expose: true
         exposedPort: 443
       frpsUi:
         port: ${FRPS_UI_BIND_PORT}
-        expose:
-          default: true
+        expose: true
         exposedPort: ${FRPS_UI_BIND_PORT}
         protocol: TCP
       frpsWs:
         port: ${FRPS_WS_BIND_PORT}
-        expose:
-          default: true
+        expose: true
         exposedPort: ${FRPS_WS_BIND_PORT}
         protocol: TCP
 
@@ -667,7 +658,7 @@ apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 failSwapOn: false
 EOF
-    log_success "K3s customization manifests created." 
+    log_success "K3s customization manifests created."
 
     log_info "Installing K3s ${K3S_VERSION}..."
     # Embedded etcd: use --cluster-init on the first (single) server; no external datastore flag
@@ -716,28 +707,28 @@ EOF
 
     # Wait for k3s HelmChart resources
     log_info "Waiting for HelmChart 'traefik' to appear..." 
-    if ! run_with_retry "kubectl -n kube-system get helmchart traefik >/dev/null 2>&1" "HelmChart/traefik exists" 240 5; then
+    if ! run_with_retry "kubectl -n kube-system get helmchart traefik >/dev/null 2>&1" "HelmChart/traefik exists" 180 5; then
         log_error_and_exit "HelmChart 'traefik' not found; Traefik installation not started."
     fi
     log_success "HelmChart/traefik detected." 
 
     log_info "Waiting for job/helm-install-traefik-crd to succeed..." 
-    if ! wait_helm_job_success "kube-system" "helm-install-traefik-crd" 360; then
+    if ! wait_helm_job_success "kube-system" "helm-install-traefik-crd" 180; then
         log_error_and_exit "job/helm-install-traefik-crd failed."
     fi
     wait_for_traefik_crds
 
     log_info "Waiting for job/helm-install-traefik to succeed..." 
-    if ! wait_helm_job_success "kube-system" "helm-install-traefik" 600; then
+    if ! wait_helm_job_success "kube-system" "helm-install-traefik" 180; then
         log_error_and_exit "job/helm-install-traefik failed."
     fi
 
     log_info "Waiting for Traefik Deployment to be created..." 
-    if ! run_with_retry "kubectl -n kube-system get deploy traefik >/dev/null 2>&1" "Deployment/traefik exists" 240 5; then
+    if ! run_with_retry "kubectl -n kube-system get deploy traefik >/dev/null 2>&1" "Deployment/traefik exists" 180 5; then
         log_error_and_exit "Traefik Deployment not created."
     fi
     log_info "Waiting for Traefik Deployment rollout..." 
-    if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=90s" "Traefik Deployment rollout" 480 10; then
+    if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=90s" "Traefik Deployment rollout" 180 10; then
         log_error_and_exit "Traefik Deployment failed to roll out."
     fi
     log_success "Traefik Deployment is Ready." 
@@ -756,7 +747,7 @@ EOF
     log_info "Checking Service/traefik exposes required ports (80, 443, ${FRPS_UI_BIND_PORT}, ${FRPS_WS_BIND_PORT})..."
     local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
     if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b${FRPS_UI_BIND_PORT}\b' && ${ports_cmd} | grep -Eq '\b${FRPS_WS_BIND_PORT}\b'" \
-        "Service/traefik to expose 80,443,${FRPS_UI_BIND_PORT},${FRPS_WS_BIND_PORT}" 240 10; then
+        "Service/traefik to expose 80,443,${FRPS_UI_BIND_PORT},${FRPS_WS_BIND_PORT}" 180 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
         diagnose_traefik_values_merge
         dump_helm_job_configs
@@ -866,7 +857,7 @@ function deploy_applications() {
 
     # 3) 等待 cert-manager 核心 Deployment 实际就绪（比直接看 Argo Application 更贴近事实）
     log_info "Waiting for cert-manager Deployments to become Available..."
-    timeout 600 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done'
+    timeout 180 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done'
     if ! kubectl -n cert-manager rollout status deploy/cert-manager --timeout=7m; then
     kubectl -n cert-manager describe deploy cert-manager || true
     kubectl -n cert-manager logs -l app.kubernetes.io/name=cert-manager --tail=200 || true
@@ -908,20 +899,20 @@ function deploy_applications() {
 
     # 逐个等待 Healthy（放宽超时以适应首次签发/拉起）
     log_info "Waiting for core-manifests application to become Healthy..."
-    if ! run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 600 10; then
+    if ! run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 180 10; then
     kubectl get application/core-manifests -n argocd -o yaml || true
     log_error_and_exit "core-manifests not Healthy."
     fi
 
     log_info "Waiting for argocd-ingress application to become Healthy..."
-    if ! run_with_retry "kubectl get application/argocd-ingress -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "argocd-ingress Argo CD App to be Healthy" 600 10; then
+    if ! run_with_retry "kubectl get application/argocd-ingress -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "argocd-ingress Argo CD App to be Healthy" 180 10; then
     kubectl get application/argocd-ingress -n argocd -o yaml || true
     log_error_and_exit "argocd-ingress not Healthy."
     fi
 
     # 等待 provisioner Healthy（证书/Ingress 创建可能略慢，放宽超时）
     log_info "Waiting for provisioner application to become Healthy..."
-    if ! run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 600 10; then
+    if ! run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 180 10; then
     kubectl get application/provisioner -n argocd -o yaml || true
     kubectl -n provisioner get pods -o wide || true
     kubectl -n provisioner get events --sort-by=.lastTimestamp | tail -n 50 || true
@@ -930,7 +921,7 @@ function deploy_applications() {
     log_success "provisioner application is Healthy."
 
     log_info "Waiting for authentik-ingress-static application to become Healthy..."
-    if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 600 10; then
+    if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 180 10; then
     kubectl get application/authentik-ingress-static -n argocd -o yaml || true
     log_error_and_exit "authentik-ingress-static not Healthy."
     fi
@@ -975,14 +966,14 @@ function final_verification() {
 
     # [ADD START] wait for provisioner gateway backend readiness and TLS secret presence
     log_info "Waiting for provisioner-gateway Deployment rollout..."
-    if ! run_with_retry "kubectl -n provisioner rollout status deploy/provisioner-gateway --timeout=60s" "provisioner-gateway rollout to complete" 240 10; then
+    if ! run_with_retry "kubectl -n provisioner rollout status deploy/provisioner-gateway --timeout=60s" "provisioner-gateway rollout to complete" 180 10; then
     kubectl -n provisioner describe deploy provisioner-gateway || true
     kubectl -n provisioner get pods -o wide || true
     log_error_and_exit "provisioner-gateway failed to roll out."
     fi
 
     log_info "Waiting for Service/provisioner-gateway endpoints to be populated..."
-    if ! run_with_retry "kubectl -n provisioner get endpoints provisioner-gateway -o jsonpath='{.subsets[0].addresses[0].ip}' | grep -E '.+'" "provisioner-gateway Endpoints to be Ready" 240 10; then
+    if ! run_with_retry "kubectl -n provisioner get endpoints provisioner-gateway -o jsonpath='{.subsets[0].addresses[0].ip}' | grep -E '.+'" "provisioner-gateway Endpoints to be Ready" 180 10; then
     kubectl -n provisioner get endpoints provisioner-gateway -o yaml || true
     log_error_and_exit "provisioner-gateway Endpoints not ready."
     fi
