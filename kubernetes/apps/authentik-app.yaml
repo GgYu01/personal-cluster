@@ -21,7 +21,6 @@ spec:
           error_reporting:
             enabled: false
           postgresql:
-            # Keep app -> DB password synced with subchart
             password: "a_strong_database_password_change_me"
           redis:
             password: ""
@@ -32,8 +31,7 @@ spec:
           image:
             registry: docker.io
             repository: bitnami/postgresql
-            # Important: do NOT set 'tag'. Let the subchart pick the correct one.
-            # tag: ""
+            tag: "17"          # <-- FIX: explicit, valid tag in Bitnami repo
           auth:
             username: "authentik"
             database: "authentik"
@@ -65,8 +63,7 @@ spec:
           image:
             registry: docker.io
             repository: bitnami/redis
-            # Important: do NOT set 'tag'. Let the subchart pick the correct one.
-            # tag: ""
+            tag: "8.2"         # <-- FIX: explicit, valid tag in Bitnami repo
   destination: 
     server: https://kubernetes.default.svc
     namespace: authentik
