@@ -89,8 +89,8 @@ cf_api() {
 }
 
 wait_apiserver_ready() { 
-  # $1 timeout seconds (default 180), $2 interval seconds (default 5) 
-  local timeout_s="${1:-180}" 
+  # $1 timeout seconds (default 150), $2 interval seconds (default 5) 
+  local timeout_s="${1:-150}" 
   local interval_s="${2:-5}" 
   log_info "Checking Kubernetes apiserver readiness (/readyz) with timeout ${timeout_s}s..." 
   if ! timeout "${timeout_s}s" bash -lc \
@@ -246,7 +246,7 @@ wait_for_traefik_crds() {
         serverstransports.traefik.io
     )
     for c in "${crds[@]}"; do
-        if ! run_with_retry "kubectl get crd ${c} >/dev/null 2>&1" "CRD ${c} present" 180 5; then
+        if ! run_with_retry "kubectl get crd ${c} >/dev/null 2>&1" "CRD ${c} present" 150 5; then
             log_error_and_exit "Required CRD ${c} not found after traefik-crd installation."
         fi
     done
@@ -263,7 +263,7 @@ diagnose_traefik_values_merge() {
     echo
     echo "==== [DIAG] /var/lib/rancher/k3s/server/manifests/traefik-config.yaml (file on disk) ===="
     if [[ -f /var/lib/rancher/k3s/server/manifests/traefik-config.yaml ]]; then
-      sed -n '1,200p' /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+      sed -n '1,150p' /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
     else
       echo "(file not found)"
     fi
@@ -287,7 +287,7 @@ diagnose_traefik_install() {
 
     echo "==== [DIAG] Traefik deployment (if any) ===="
     kubectl -n kube-system get deploy/traefik -o yaml 2>/dev/null || true
-    kubectl -n kube-system logs deploy/traefik --tail=200 2>/dev/null || true
+    kubectl -n kube-system logs deploy/traefik --tail=150 2>/dev/null || true
 
     echo "==== [DIAG] Traefik service (if any) ===="
     kubectl -n kube-system get svc/traefik -o yaml 2>/dev/null || true
@@ -338,12 +338,12 @@ diagnose_k3s_failure() {
     echo "--- [k3s service status] ---"
     systemctl status k3s.service --no-pager 2>/dev/null || true
 
-    echo "--- [journals] k3s (anchored, unique, last 200) ---"
+    echo "--- [journals] k3s (anchored, unique, last 150) ---"
     # Only logs since current run; de-duplicate identical lines; bound length
     local since_arg="${K3S_JOURNAL_ANCHOR:-"15 min ago"}"
     journalctl -u k3s.service --since "${since_arg}" --no-pager -o short-iso 2>/dev/null \
       | awk '!seen[$0]++' \
-      | tail -n 200
+      | tail -n 150
 
     # Kubernetes-level diagnostics (if apiserver is reachable)
     if command -v kubectl >/dev/null 2>&1; then
@@ -371,8 +371,8 @@ diagnose_k3s_failure() {
       fi
 
       echo "--- [kube-system] HelmChart/HelmChartConfig (traefik) ---"
-      kubectl -n kube-system get helmchart traefik -o yaml 2>/dev/null | sed -n '1,200p' || true
-      kubectl -n kube-system get helmchartconfig traefik -o yaml 2>/dev/null | sed -n '1,200p' || true
+      kubectl -n kube-system get helmchart traefik -o yaml 2>/dev/null | sed -n '1,150p' || true
+      kubectl -n kube-system get helmchartconfig traefik -o yaml 2>/dev/null | sed -n '1,150p' || true
 
       echo "--- [kube-system] recent events (tail 60) ---"
       kubectl -n kube-system get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 60 || true
@@ -510,7 +510,7 @@ function deploy_etcd() {
 
     # Primary check: etcdctl v3 inside container (low-noise, rate-limited progress)
     log_info "Waiting for ETCD endpoint health via etcdctl (v3, in-container) ..."
-    if ! run_with_retry "docker exec ${ETCD_CONTAINER_NAME} env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint health" "ETCD to be healthy (etcdctl)" 180 3 30; then
+    if ! run_with_retry "docker exec ${ETCD_CONTAINER_NAME} env ETCDCTL_API=3 etcdctl --endpoints=http://127.0.0.1:2379 endpoint health" "ETCD to be healthy (etcdctl)" 150 3 30; then
         log_warn "Primary etcdctl health check did not pass within timeout. Trying HTTP /health as fallback..."
 
         # Fallback check: host-side HTTP /health (etcd exposes HTTP health for v3 when http listen is enabled)
@@ -554,20 +554,24 @@ spec:
     ports:
       web:
         port: 8000
-        expose: true
+        expose:
+          default: true
         exposedPort: 80
       websecure:
         port: 8443
-        expose: true
+        expose:
+          default: true
         exposedPort: 443
       frpsUi:
         port: ${FRPS_UI_BIND_PORT}
-        expose: true
+        expose:
+          default: true
         exposedPort: ${FRPS_UI_BIND_PORT}
         protocol: TCP
       frpsWs:
         port: ${FRPS_WS_BIND_PORT}
-        expose: true
+        expose:
+          default: true
         exposedPort: ${FRPS_WS_BIND_PORT}
         protocol: TCP
 
@@ -581,20 +585,20 @@ EOF
   kubectl -n kube-system delete job helm-install-traefik --ignore-not-found
 
   log_info "Waiting for job/helm-install-traefik to be recreated..." 
-  if ! timeout 180 bash -lc 'until kubectl -n kube-system get job helm-install-traefik >/dev/null 2>&1; do echo "    ... waiting job"; sleep 3; done'; then
+  if ! timeout 150 bash -lc 'until kubectl -n kube-system get job helm-install-traefik >/dev/null 2>&1; do echo "    ... waiting job"; sleep 3; done'; then
     diagnose_traefik_install
     log_error_and_exit "job/helm-install-traefik not recreated." 
   fi
 
   log_info "Waiting for job/helm-install-traefik to succeed (post-config apply)..." 
-  if ! wait_helm_job_success "kube-system" "helm-install-traefik" 180; then
+  if ! wait_helm_job_success "kube-system" "helm-install-traefik" 600; then
     dump_helm_job_configs
     diagnose_traefik_install
     log_error_and_exit "job/helm-install-traefik failed after applying HelmChartConfig." 
   fi
 
   log_info "Waiting for Traefik deployment rollout after config applied..." 
-  if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=120s" "Traefik Deployment rollout (post-config)" 180 10; then
+  if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=120s" "Traefik Deployment rollout (post-config)" 480 10; then
     diagnose_traefik_install
     log_error_and_exit "Traefik Deployment failed to roll out after applying HelmChartConfig." 
   fi
@@ -632,20 +636,24 @@ spec:
     ports:
       web:
         port: 8000
-        expose: true
+        expose:
+          default: true
         exposedPort: 80
       websecure:
         port: 8443
-        expose: true
+        expose:
+          default: true
         exposedPort: 443
       frpsUi:
         port: ${FRPS_UI_BIND_PORT}
-        expose: true
+        expose:
+          default: true
         exposedPort: ${FRPS_UI_BIND_PORT}
         protocol: TCP
       frpsWs:
         port: ${FRPS_WS_BIND_PORT}
-        expose: true
+        expose:
+          default: true
         exposedPort: ${FRPS_WS_BIND_PORT}
         protocol: TCP
 
@@ -689,16 +697,16 @@ EOF
     chown "$(id -u):$(id -g)" "${USER_KUBECONFIG_PATH}" 
     export KUBECONFIG="${USER_KUBECONFIG_PATH}" 
 
-    log_info "Waiting for Node object to appear (Timeout: 180s)..."
-    if ! timeout 180 bash -lc 'until kubectl get nodes --no-headers 2>/dev/null | grep -q .; do echo "    ...Node list empty, waiting..."; sleep 5; done'; then
+    log_info "Waiting for Node object to appear (Timeout: 150s)..."
+    if ! timeout 150 bash -lc 'until kubectl get nodes --no-headers 2>/dev/null | grep -q .; do echo "    ...Node list empty, waiting..."; sleep 5; done'; then
       kubectl get nodes -o wide || true
       diagnose_k3s_failure "node-object-missing"
       log_error_and_exit "Node objects did not appear in time."
     fi
 
     # 再等 Node Ready（kubectl wait）
-    log_info "Waiting for all Nodes to be Ready via kubectl wait (Timeout: 180s)..."
-    if ! kubectl wait --for=condition=Ready node --all --timeout=180s 2>&1 | tee -a "${LOG_FILE}"; then
+    log_info "Waiting for all Nodes to be Ready via kubectl wait (Timeout: 150s)..."
+    if ! kubectl wait --for=condition=Ready node --all --timeout=150s 2>&1 | tee -a "${LOG_FILE}"; then
       kubectl get nodes -o wide || true
       diagnose_k3s_failure "node-not-ready"
       log_error_and_exit "K3s cluster verification failed."
@@ -707,28 +715,28 @@ EOF
 
     # Wait for k3s HelmChart resources
     log_info "Waiting for HelmChart 'traefik' to appear..." 
-    if ! run_with_retry "kubectl -n kube-system get helmchart traefik >/dev/null 2>&1" "HelmChart/traefik exists" 180 5; then
+    if ! run_with_retry "kubectl -n kube-system get helmchart traefik >/dev/null 2>&1" "HelmChart/traefik exists" 150 5; then
         log_error_and_exit "HelmChart 'traefik' not found; Traefik installation not started."
     fi
     log_success "HelmChart/traefik detected." 
 
     log_info "Waiting for job/helm-install-traefik-crd to succeed..." 
-    if ! wait_helm_job_success "kube-system" "helm-install-traefik-crd" 180; then
+    if ! wait_helm_job_success "kube-system" "helm-install-traefik-crd" 150; then
         log_error_and_exit "job/helm-install-traefik-crd failed."
     fi
     wait_for_traefik_crds
 
     log_info "Waiting for job/helm-install-traefik to succeed..." 
-    if ! wait_helm_job_success "kube-system" "helm-install-traefik" 180; then
+    if ! wait_helm_job_success "kube-system" "helm-install-traefik" 150; then
         log_error_and_exit "job/helm-install-traefik failed."
     fi
 
     log_info "Waiting for Traefik Deployment to be created..." 
-    if ! run_with_retry "kubectl -n kube-system get deploy traefik >/dev/null 2>&1" "Deployment/traefik exists" 180 5; then
+    if ! run_with_retry "kubectl -n kube-system get deploy traefik >/dev/null 2>&1" "Deployment/traefik exists" 150 5; then
         log_error_and_exit "Traefik Deployment not created."
     fi
     log_info "Waiting for Traefik Deployment rollout..." 
-    if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=90s" "Traefik Deployment rollout" 180 10; then
+    if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=90s" "Traefik Deployment rollout" 150 10; then
         log_error_and_exit "Traefik Deployment failed to roll out."
     fi
     log_success "Traefik Deployment is Ready." 
@@ -747,7 +755,7 @@ EOF
     log_info "Checking Service/traefik exposes required ports (80, 443, ${FRPS_UI_BIND_PORT}, ${FRPS_WS_BIND_PORT})..."
     local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
     if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b${FRPS_UI_BIND_PORT}\b' && ${ports_cmd} | grep -Eq '\b${FRPS_WS_BIND_PORT}\b'" \
-        "Service/traefik to expose 80,443,${FRPS_UI_BIND_PORT},${FRPS_WS_BIND_PORT}" 180 10; then
+        "Service/traefik to expose 80,443,${FRPS_UI_BIND_PORT},${FRPS_WS_BIND_PORT}" 150 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
         diagnose_traefik_values_merge
         dump_helm_job_configs
@@ -761,11 +769,11 @@ function verify_frps_entrypoint_and_tls() {
     log_step 6 "Verify frps UI/WS entryPoints and wildcard TLS readiness"
 
     # 1) IngressRouteTCP existence
-    if ! run_with_retry "kubectl -n frp-system get ingressroutetcp frps-ui-tcp-ingress >/dev/null 2>&1" "IngressRouteTCP 'frps-ui-tcp-ingress' present" 180 5; then
+    if ! run_with_retry "kubectl -n frp-system get ingressroutetcp frps-ui-tcp-ingress >/dev/null 2>&1" "IngressRouteTCP 'frps-ui-tcp-ingress' present" 150 5; then
         kubectl -n frp-system get ingressroutetcp -o yaml || true
         log_error_and_exit "IngressRouteTCP 'frps-ui-tcp-ingress' not found."
     fi
-    if ! run_with_retry "kubectl -n frp-system get ingressroutetcp frps-ws-tcp-ingress >/dev/null 2>&1" "IngressRouteTCP 'frps-ws-tcp-ingress' present" 180 5; then
+    if ! run_with_retry "kubectl -n frp-system get ingressroutetcp frps-ws-tcp-ingress >/dev/null 2>&1" "IngressRouteTCP 'frps-ws-tcp-ingress' present" 150 5; then
         kubectl -n frp-system get ingressroutetcp -o yaml || true
         log_error_and_exit "IngressRouteTCP 'frps-ws-tcp-ingress' not found."
     fi
@@ -774,12 +782,12 @@ function verify_frps_entrypoint_and_tls() {
     # 2) External TCP reachability (UI/WS control planes)
     local tcp_check_ui="timeout 2 bash -lc '</dev/tcp/${VPS_IP}/${FRPS_UI_BIND_PORT}' >/dev/null 2>&1"
     local tcp_check_ws="timeout 2 bash -lc '</dev/tcp/${VPS_IP}/${FRPS_WS_BIND_PORT}' >/dev/null 2>&1"
-    if ! run_with_retry "${tcp_check_ui}" "External TCP connectivity to ${VPS_IP}:${FRPS_UI_BIND_PORT}" 180 5; then
+    if ! run_with_retry "${tcp_check_ui}" "External TCP connectivity to ${VPS_IP}:${FRPS_UI_BIND_PORT}" 150 5; then
         kubectl -n kube-system get svc traefik -o wide || true
         kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=120 || true
         log_error_and_exit "frps UI entryPoint not reachable on ${VPS_IP}:${FRPS_UI_BIND_PORT}."
     fi
-    if ! run_with_retry "${tcp_check_ws}" "External TCP connectivity to ${VPS_IP}:${FRPS_WS_BIND_PORT}" 180 5; then
+    if ! run_with_retry "${tcp_check_ws}" "External TCP connectivity to ${VPS_IP}:${FRPS_WS_BIND_PORT}" 150 5; then
         kubectl -n kube-system get svc traefik -o wide || true
         kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=120 || true
         log_error_and_exit "frps WS entryPoint not reachable on ${VPS_IP}:${FRPS_WS_BIND_PORT}."
@@ -836,7 +844,7 @@ function bootstrap_gitops() {
     kubectl apply -f kubernetes/bootstrap/argocd-app.yaml
 
     log_info "Waiting for Argo CD to sync its own application resource..."
-    if ! run_with_retry "kubectl get application/argocd -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Argo CD to become Healthy and self-managed" 180; then
+    if ! run_with_retry "kubectl get application/argocd -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Argo CD to become Healthy and self-managed" 150; then
         log_info "Argo CD self-management sync failed. Dumping application status:"
         kubectl get application/argocd -n argocd -o yaml
         log_error_and_exit "Argo CD bootstrap failed at self-management step."
@@ -853,25 +861,25 @@ function deploy_applications() {
     kubectl apply -f kubernetes/apps/cert-manager-app.yaml
 
     # 2) API server 就绪门控，避免 Admission 注册过程的瞬时失败
-    wait_apiserver_ready 180 5
+    wait_apiserver_ready 150 5
 
     # 3) 等待 cert-manager 核心 Deployment 实际就绪（比直接看 Argo Application 更贴近事实）
     log_info "Waiting for cert-manager Deployments to become Available..."
-    timeout 180 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done'
+    timeout 150 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done'
     if ! kubectl -n cert-manager rollout status deploy/cert-manager --timeout=7m; then
     kubectl -n cert-manager describe deploy cert-manager || true
-    kubectl -n cert-manager logs -l app.kubernetes.io/name=cert-manager --tail=200 || true
+    kubectl -n cert-manager logs -l app.kubernetes.io/name=cert-manager --tail=150 || true
     log_error_and_exit "Deployment cert-manager failed to roll out."
     fi
     if ! kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=7m; then
     kubectl -n cert-manager describe deploy cert-manager-webhook || true
-    kubectl -n cert-manager logs -l app.kubernetes.io/name=webhook --tail=200 || true
+    kubectl -n cert-manager logs -l app.kubernetes.io/name=webhook --tail=150 || true
     log_error_and_exit "Deployment cert-manager-webhook failed to roll out."
     fi
     log_success "cert-manager core Deployments are Available."
 
     # 4) 再做一次 apiserver 就绪门控（webhook/CRD 安装后常见波动）
-    wait_apiserver_ready 180 5
+    wait_apiserver_ready 150 5
 
     # 5) 从 Argo 视角等待 cert-manager Application Healthy（延长超时以适应首次安装）
     log_info "Waiting for Cert-Manager application to become Healthy in Argo CD..."
@@ -899,20 +907,20 @@ function deploy_applications() {
 
     # 逐个等待 Healthy（放宽超时以适应首次签发/拉起）
     log_info "Waiting for core-manifests application to become Healthy..."
-    if ! run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 180 10; then
+    if ! run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 150 10; then
     kubectl get application/core-manifests -n argocd -o yaml || true
     log_error_and_exit "core-manifests not Healthy."
     fi
 
     log_info "Waiting for argocd-ingress application to become Healthy..."
-    if ! run_with_retry "kubectl get application/argocd-ingress -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "argocd-ingress Argo CD App to be Healthy" 180 10; then
+    if ! run_with_retry "kubectl get application/argocd-ingress -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "argocd-ingress Argo CD App to be Healthy" 150 10; then
     kubectl get application/argocd-ingress -n argocd -o yaml || true
     log_error_and_exit "argocd-ingress not Healthy."
     fi
 
     # 等待 provisioner Healthy（证书/Ingress 创建可能略慢，放宽超时）
     log_info "Waiting for provisioner application to become Healthy..."
-    if ! run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 180 10; then
+    if ! run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 150 10; then
     kubectl get application/provisioner -n argocd -o yaml || true
     kubectl -n provisioner get pods -o wide || true
     kubectl -n provisioner get events --sort-by=.lastTimestamp | tail -n 50 || true
@@ -921,7 +929,7 @@ function deploy_applications() {
     log_success "provisioner application is Healthy."
 
     log_info "Waiting for authentik-ingress-static application to become Healthy..."
-    if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 180 10; then
+    if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 150 10; then
     kubectl get application/authentik-ingress-static -n argocd -o yaml || true
     log_error_and_exit "authentik-ingress-static not Healthy."
     fi
@@ -931,7 +939,7 @@ function deploy_applications() {
 
 function final_verification() {
     log_step 6 "Final End-to-End Verification"
-    wait_apiserver_ready 180 5
+    wait_apiserver_ready 150 5
 
     log_info "Verifying ClusterIssuer 'cloudflare-staging' is ready..."
     if ! run_with_retry "kubectl wait --for=condition=Ready clusterissuer/cloudflare-staging --timeout=2m" "ClusterIssuer to be Ready" 120 10; then
@@ -941,7 +949,7 @@ function final_verification() {
     fi
 
     log_info "Verifying ArgoCD IngressRoute certificate has been issued..."
-    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/argocd-server-tls-staging -n argocd --timeout=5m" "Certificate to be Ready" 180 15; then
+    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/argocd-server-tls-staging -n argocd --timeout=5m" "Certificate to be Ready" 150 15; then
         log_info "Certificate did not become ready. Dumping Cert-Manager logs and describing Certificate:"
         kubectl logs -n cert-manager -l app.kubernetes.io/instance=cert-manager --all-containers
         kubectl describe certificate -n argocd argocd-server-tls-staging
@@ -949,16 +957,16 @@ function final_verification() {
     fi
 
     log_info "Performing final reachability check on ArgoCD URL: https://${ARGOCD_FQDN}"
-    local check_cmd="curl -k -L -s -o /dev/null -w '%{http_code}' --resolve ${ARGOCD_FQDN}:443:${VPS_IP} https://${ARGOCD_FQDN}/ | grep -q '200'"
-    if ! run_with_retry "${check_cmd}" "ArgoCD UI to be reachable (HTTP 200 OK)" 120 10; then
-        log_info "ArgoCD UI is not reachable or not returning HTTP 200. Dumping Traefik and Argo CD Server logs:"
+    local check_cmd="curl -k -L -s -o /dev/null -w '%{http_code}' --resolve ${ARGOCD_FQDN}:443:${VPS_IP} https://${ARGOCD_FQDN}/ | grep -q '150'"
+    if ! run_with_retry "${check_cmd}" "ArgoCD UI to be reachable (HTTP 150 OK)" 120 10; then
+        log_info "ArgoCD UI is not reachable or not returning HTTP 150. Dumping Traefik and Argo CD Server logs:"
         kubectl logs -n kube-system -l app.kubernetes.io/name=traefik
         kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server
         log_error_and_exit "End-to-end verification failed."
     fi
 
     log_info "Verifying Provisioner portal Certificate has been issued..."
-    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/portal-tls-staging -n provisioner --timeout=5m" "Portal Certificate to be Ready" 180 15; then
+    if ! run_with_retry "kubectl wait --for=condition=Ready certificate/portal-tls-staging -n provisioner --timeout=5m" "Portal Certificate to be Ready" 150 15; then
     kubectl -n provisioner describe certificate portal-tls-staging || true
     kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=100 || true
     log_error_and_exit "Portal certificate issuance failed."
@@ -966,20 +974,20 @@ function final_verification() {
 
     # [ADD START] wait for provisioner gateway backend readiness and TLS secret presence
     log_info "Waiting for provisioner-gateway Deployment rollout..."
-    if ! run_with_retry "kubectl -n provisioner rollout status deploy/provisioner-gateway --timeout=60s" "provisioner-gateway rollout to complete" 180 10; then
+    if ! run_with_retry "kubectl -n provisioner rollout status deploy/provisioner-gateway --timeout=60s" "provisioner-gateway rollout to complete" 150 10; then
     kubectl -n provisioner describe deploy provisioner-gateway || true
     kubectl -n provisioner get pods -o wide || true
     log_error_and_exit "provisioner-gateway failed to roll out."
     fi
 
     log_info "Waiting for Service/provisioner-gateway endpoints to be populated..."
-    if ! run_with_retry "kubectl -n provisioner get endpoints provisioner-gateway -o jsonpath='{.subsets[0].addresses[0].ip}' | grep -E '.+'" "provisioner-gateway Endpoints to be Ready" 180 10; then
+    if ! run_with_retry "kubectl -n provisioner get endpoints provisioner-gateway -o jsonpath='{.subsets[0].addresses[0].ip}' | grep -E '.+'" "provisioner-gateway Endpoints to be Ready" 150 10; then
     kubectl -n provisioner get endpoints provisioner-gateway -o yaml || true
     log_error_and_exit "provisioner-gateway Endpoints not ready."
     fi
 
     log_info "Verifying TLS Secret 'portal-tls-staging' exists for Traefik..."
-    if ! run_with_retry "kubectl -n provisioner get secret portal-tls-staging >/dev/null 2>&1" "Secret portal-tls-staging available" 180 10; then
+    if ! run_with_retry "kubectl -n provisioner get secret portal-tls-staging >/dev/null 2>&1" "Secret portal-tls-staging available" 150 10; then
     kubectl -n provisioner get secret || true
     log_error_and_exit "TLS Secret 'portal-tls-staging' is missing."
     fi
@@ -990,10 +998,10 @@ function final_verification() {
     # [ADD END]
 
     log_info "Performing reachability check on Portal URL: https://${PORTAL_FQDN}"
-    # 以 200/3xx 为成功（echo-server 默认 200）
-    if ! run_with_retry "curl -k -s -o /dev/null -w '%{http_code}' --resolve ${PORTAL_FQDN}:443:${VPS_IP} https://${PORTAL_FQDN}/ | egrep -q '^(200|30[12])$'" "Provisioner portal to be reachable (HTTP 200/30x)" 180 10; then
+    # 以 150/3xx 为成功（echo-server 默认 150）
+    if ! run_with_retry "curl -k -s -o /dev/null -w '%{http_code}' --resolve ${PORTAL_FQDN}:443:${VPS_IP} https://${PORTAL_FQDN}/ | egrep -q '^(150|30[12])$'" "Provisioner portal to be reachable (HTTP 150/30x)" 150 10; then
     kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=120 || true
-    kubectl -n provisioner logs deploy/provisioner-gateway --tail=200 || true
+    kubectl -n provisioner logs deploy/provisioner-gateway --tail=150 || true
     log_error_and_exit "Portal end-to-end verification failed."
     fi
     log_success "Portal is reachable with valid TLS."
