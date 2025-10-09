@@ -9,34 +9,65 @@ from urllib.parse import urljoin, urlparse
 
 # --- Configuration ---
 URLS_TO_PROCESS = [
-    # K3s 文档根
-    "https://docs.k3s.io/",
+    "https://github.com/k3s-io/k3s/releases/tag/v1.33.3+k3s1", 
+    "https://docs.k3s.io/helm", 
 
-    # Traefik 文档根
+    # -- K3s: 安装、配置、外置数据存储、网络 --
+    "https://docs.k3s.io/installation",
+    "https://docs.k3s.io/installation/configuration",
+    "https://docs.k3s.io/datastore",
+    "https://docs.k3s.io/networking",
+    "https://github.com/k3s-io/helm-controller",
+
+    # -- Traefik: Kubernetes CRD, IngressRoute/TCP, EntryPoints/TLS, Helm Chart --
     "https://doc.traefik.io/traefik/",
+    "https://doc.traefik.io/traefik/providers/kubernetes-crd/",
+    "https://doc.traefik.io/traefik/routing/routers/",
+    "https://doc.traefik.io/traefik/routing/entrypoints/",
+    "https://doc.traefik.io/traefik/https/tls/",
+    "https://github.com/traefik/traefik-helm-chart/tree/master/traefik",
+    "https://github.com/traefik/traefik-helm-chart/blob/master/traefik/values.yaml",
 
-    # cert-manager 文档根
+    # -- cert-manager: 安装、ACME DNS-01、Cloudflare、故障排查、概念 --
     "https://cert-manager.io/docs/",
+    "https://cert-manager.io/docs/installation/helm/",
+    "https://cert-manager.io/docs/configuration/acme/",
+    "https://cert-manager.io/docs/configuration/acme/dns01/cloudflare/",
+    "https://cert-manager.io/docs/troubleshooting/acme/",
+    "https://cert-manager.io/docs/usage/certificate/",
 
-    # Argo CD 文档根
-    "https://argo-cd.readthedocs.io/en/stable/",
+    # -- Let's Encrypt: 频率限制 --
+    "https://letsencrypt.org/docs/rate-limits/",
 
-    # ArtifactHub（如你本地可抓取其 Values 渲染）
-    "https://artifacthub.io/packages/helm/argo/argo-cd/",
-    "https://artifacthub.io/packages/helm/traefik/traefik/",
-    "https://artifacthub.io/packages/helm/goauthentik/authentik/",
-
-    # Cloudflare API 根
+    # -- Cloudflare API v4: Zone 和 DNS Records --
     "https://developers.cloudflare.com/api/",
+    "https://developers.cloudflare.com/api/operations/dns-records-for-a-zone-list-dns-records",
+    "https://developers.cloudflare.com/api/operations/dns-records-for-a-zone-create-dns-record",
+    "https://developers.cloudflare.com/api/operations/dns-records-for-a-zone-update-dns-record",
 
-    # Let’s Encrypt 文档根
-    "https://letsencrypt.org/docs/",
+    # -- Argo CD: Chart、声明式应用、同步波次/依赖、Ingress --
+    "https://github.com/argoproj/argo-helm/tree/main/charts/argo-cd",
+    "https://argo-cd.readthedocs.io/en/stable/",
+    "https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/",
+    "https://argo-cd.readthedocs.io/en/stable/user-guide/application_dependencies/",
+    "https://argo-cd.readthedocs.io/en/stable/operator-manual/ingress/",
 
-    # Authentik 文档根
+    # -- FRP: frps 配置、子域/HTTP vhost、版本 --
+    "https://gofrp.org/",
+    "https://gofrp.org/docs/reference/server-configures/",
+    "https://gofrp.org/docs/features/http/",
+    "https://github.com/fatedier/frp/releases",
+
+    # -- MetalLB: 安装与配置（如后续需要） --
+    "https://metallb.universe.tf/",
+    "https://metallb.universe.tf/installation/",
+    "https://metallb.universe.tf/configuration/",
+
+    # -- Authentik: 文档与 Helm Chart --
     "https://docs.goauthentik.io/",
-
-    # FRP 仓库根（如需其它子文档）
-    "https://github.com/fatedier/frp/",
+    "https://docs.goauthentik.io/docs/installation/kubernetes/",
+    "https://docs.goauthentik.io/docs/installation/kubernetes/helm-chart/",
+    "https://charts.goauthentik.io/",
 ]
 
 # Directory to save all output files
