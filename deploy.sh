@@ -316,6 +316,43 @@ run_with_retry() {
     done
 }
 
+# Robust wait for Argo CD Application to become Healthy with apiserver gating
+wait_argocd_app_healthy() {
+  # $1 app name in argocd namespace
+  # $2 timeout seconds (default 150)
+  # $3 workload namespace for diagnostics (optional)
+  local app="$1"; local timeout="${2:-150}"; local workns="${3:-}"
+  local start_ts now status elapsed
+
+  log_info "Waiting Argo CD Application '${app}' to become Healthy (timeout ${timeout}s)..."
+  start_ts=$(date +%s)
+  while true; do
+    # Gate on apiserver readyz
+    if ! kubectl --request-timeout=10s get --raw=/readyz >/dev/null 2>&1; then
+      echo "    ...apiserver not ready yet (readyz), wait 5s"
+      sleep 5
+      continue
+    fi
+    status="$(kubectl -n argocd get application/${app} -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+    if [[ "${status}" == "Healthy" ]]; then
+      log_success "Argo CD Application '${app}' is Healthy."
+      return 0
+    fi
+    now=$(date +%s); elapsed=$(( now - start_ts ))
+    if (( elapsed >= timeout )); then
+      log_warn "Argo CD Application '${app}' did not become Healthy within ${timeout}s. Collecting diagnostics..."
+      kubectl -n argocd get application/${app} -o yaml || true
+      if [[ -n "${workns}" ]]; then
+        kubectl -n "${workns}" get pods -o wide || true
+        kubectl -n "${workns}" get events --sort-by=.lastTimestamp | tail -n 80 || true
+      fi
+      return 1
+    fi
+    echo "    ...waiting '${app}' Health (current: ${status:-unknown}) elapsed: ${elapsed}s"
+    sleep 10
+  done
+}
+
 # Single-shot job logs collector for helm jobs
 print_job_pod_logs() {
     # $1: namespace, $2: job name
@@ -981,57 +1018,66 @@ function bootstrap_gitops() {
 function deploy_applications() { 
     log_step 5 "Deploy Core Applications via GitOps" 
 
-    # 1) cert-manager
+    # 1) cert-manager 提交与门控（保持不变）
     log_info "Applying cert-manager Application (only)..." 
     kubectl apply -f kubernetes/apps/cert-manager-app.yaml
     wait_apiserver_ready 150 5
     log_info "Waiting for cert-manager Deployments to become Available..." 
-    timeout 180 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done' 
+    timeout 600 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done' 
     kubectl -n cert-manager rollout status deploy/cert-manager --timeout=7m || { kubectl -n cert-manager describe deploy cert-manager || true; log_error_and_exit "Deployment cert-manager failed to roll out."; }
     kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=7m || { kubectl -n cert-manager describe deploy cert-manager-webhook || true; log_error_and_exit "Deployment cert-manager-webhook failed to roll out."; }
     log_success "cert-manager core Deployments are Available."
     wait_apiserver_ready 150 5
     log_info "Waiting for Cert-Manager application to become Healthy in Argo CD..." 
-    run_with_retry "kubectl get application/cert-manager -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Cert-Manager Argo CD App to be Healthy" 100 10 || log_error_and_exit "Cert-Manager deployment via Argo CD failed (not Healthy within timeout)."
+    if ! run_with_retry "kubectl get application/cert-manager -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Cert-Manager Argo CD App to be Healthy" 100 10; then
+      kubectl get application/cert-manager -n argocd -o yaml || true
+      kubectl -n cert-manager get pods -o wide || true
+      kubectl -n cert-manager get events --sort-by=.lastTimestamp | tail -n 50 || true
+      log_error_and_exit "Cert-Manager deployment via Argo CD failed (not Healthy within timeout)."
+    fi
+    log_success "Cert-Manager application is Healthy in Argo CD."
 
-    # 2) Apply remaining apps
-    log_info "Applying remaining Applications (excluding n8n)..." 
+    # 2) 提交“非 Authentik”的核心应用，先确保 provisioner 成功（降并发）
+    log_info "Applying core Applications (excluding authentik)..." 
     kubectl apply -f kubernetes/apps/frps-app.yaml
     kubectl apply -f kubernetes/apps/core-manifests-app.yaml
     kubectl apply -f kubernetes/apps/argocd-ingress-app.yaml
     kubectl apply -f kubernetes/apps/provisioner-app.yaml
 
-    # [ADD/ENSURE] 交付 authentik 主应用与静态 ingress
-    kubectl apply -f kubernetes/apps/authentik-app.yaml
-    kubectl apply -f kubernetes/apps/authentik-ingress-static-app.yaml
+    # 3) 依次等待 Healthy（使用鲁棒等待函数，自动处理 apiserver 短暂不可用）
+    log_info "Waiting for core-manifests application to become Healthy..."
+    if ! wait_argocd_app_healthy "core-manifests" 150; then
+      log_error_and_exit "core-manifests not Healthy."
+    fi
 
-    # 逐项健康等待（不变部分略）
+    log_info "Waiting for argocd-ingress application to become Healthy..."
+    if ! wait_argocd_app_healthy "argocd-ingress" 150; then
+      log_error_and_exit "argocd-ingress not Healthy."
+    fi
 
-    log_info "Waiting for provisioner application to become Healthy..." 
-    if ! run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 150 10; then
-      kubectl get application/provisioner -n argocd -o yaml || true
-      kubectl -n provisioner get pods -o wide || true
-      kubectl -n provisioner get events --sort-by=.lastTimestamp | tail -n 50 || true
-      log_error_and_exit "provisioner not Healthy." 
+    log_info "Waiting for provisioner application to become Healthy..."
+    if ! wait_argocd_app_healthy "provisioner" 150 "provisioner"; then
+      log_error_and_exit "provisioner not Healthy."
     fi
     log_success "provisioner application is Healthy."
 
-    # [MODIFY] authentik 主应用健康等待 + 自动采集
-    log_info "Waiting for authentik application to become Healthy..." 
-    if ! run_with_retry "kubectl get application/authentik -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik Argo CD App to be Healthy" "${AUTHENTIK_HEALTH_TIMEOUT}" 10; then
-      kubectl get application/authentik -n argocd -o yaml || true
-      # 自动采集详细诊断
+    # 4) provisioner 稳定后再部署 Authentik（避免拉镜像/初始化与其他应用同一时间峰值）
+    log_info "Applying authentik Applications..."
+    kubectl apply -f kubernetes/apps/authentik-app.yaml
+    kubectl apply -f kubernetes/apps/authentik-ingress-static-app.yaml
+
+    log_info "Waiting for authentik application to become Healthy..."
+    if ! wait_argocd_app_healthy "authentik" "${AUTHENTIK_HEALTH_TIMEOUT:-600}" "authentik"; then
       collect_authentik_diagnostics
-      log_error_and_exit "authentik not Healthy within ${AUTHENTIK_HEALTH_TIMEOUT}s. Diagnostics collected."
+      log_error_and_exit "authentik not Healthy within ${AUTHENTIK_HEALTH_TIMEOUT:-600}s. Diagnostics collected."
     fi
 
-    log_info "Waiting for authentik-ingress-static application to become Healthy..." 
-    if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 150 10; then
-      kubectl get application/authentik-ingress-static -n argocd -o yaml || true
+    log_info "Waiting for authentik-ingress-static application to become Healthy..."
+    if ! wait_argocd_app_healthy "authentik-ingress-static" 150 "authentik"; then
       log_error_and_exit "authentik-ingress-static not Healthy."
     fi
 
-    log_success "Remaining applications submitted and Healthy." 
+    log_success "Remaining applications submitted and Healthy."
 }
 
 function final_verification() {
