@@ -261,7 +261,7 @@ diagnose_traefik_values_merge() {
     echo "==== [DIAG] HelmChartConfig kube-system/traefik (full YAML) ===="
     kubectl -n kube-system get helmchartconfig traefik -o yaml 2>/dev/null || true
     echo
-    echo "==== [DIAG] /var/lib/rancher/k3s/server/manifests/traefik-config.yaml (if exists) ===="
+    echo "==== [DIAG] /var/lib/rancher/k3s/server/manifests/traefik-config.yaml (file on disk) ===="
     if [[ -f /var/lib/rancher/k3s/server/manifests/traefik-config.yaml ]]; then
       sed -n '1,200p' /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
     else
@@ -536,7 +536,7 @@ function deploy_etcd() {
 
 # --- [NEW] Ensure HelmChartConfig(traefik) applied and force helm reinstall ---
 apply_traefik_config_and_redeploy() {
-  log_info "Applying HelmChartConfig traefik (explicit kubectl apply to avoid manifest race)..."
+  log_info "Applying HelmChartConfig traefik (explicit apply + forced reinstall)..."
   cat > /tmp/traefik-helmchartconfig.yaml <<EOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -545,45 +545,44 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
-    traefik:
-      providers:
-        kubernetesCRD:
+    providers:
+      kubernetesCRD:
+        enabled: true
+      kubernetesIngress:
+        publishedService:
           enabled: true
-        kubernetesIngress:
-          publishedService:
-            enabled: true
 
-      ports:
-        web:
-          port: 8000
-          expose:
-            default: true
-          exposedPort: 80
-        websecure:
-          port: 8443
-          expose:
-            default: true
-          exposedPort: 443
-        frpsUi:
-          port: ${FRPS_UI_BIND_PORT}
-          expose:
-            default: true
-          exposedPort: ${FRPS_UI_BIND_PORT}
-          protocol: TCP
-        frpsWs:
-          port: ${FRPS_WS_BIND_PORT}
-          expose:
-            default: true
-          exposedPort: ${FRPS_WS_BIND_PORT}
-          protocol: TCP
+    ports:
+      web:
+        port: 8000
+        expose:
+          default: true
+        exposedPort: 80
+      websecure:
+        port: 8443
+        expose:
+          default: true
+        exposedPort: 443
+      frpsUi:
+        port: ${FRPS_UI_BIND_PORT}
+        expose:
+          default: true
+        exposedPort: ${FRPS_UI_BIND_PORT}
+        protocol: TCP
+      frpsWs:
+        port: ${FRPS_WS_BIND_PORT}
+        expose:
+          default: true
+        exposedPort: ${FRPS_WS_BIND_PORT}
+        protocol: TCP
 
-      additionalArguments:
-        - "--entrypoints.websecure.http.tls=true"
+    additionalArguments:
+      - "--entrypoints.websecure.http.tls=true"
 EOF
 
   kubectl -n kube-system apply -f /tmp/traefik-helmchartconfig.yaml
 
-  log_info "Deleting job/helm-install-traefik (if exists) to trigger reinstall with merged values..."
+  log_info "Deleting job/helm-install-traefik to trigger reinstall with new values..."
   kubectl -n kube-system delete job helm-install-traefik --ignore-not-found
 
   log_info "Waiting for job/helm-install-traefik to be recreated..."
@@ -628,40 +627,39 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
-    traefik:
-      providers:
-        kubernetesCRD:
+    providers:
+      kubernetesCRD:
+        enabled: true
+      kubernetesIngress:
+        publishedService:
           enabled: true
-        kubernetesIngress:
-          publishedService:
-            enabled: true
 
-      ports:
-        web:
-          port: 8000
-          expose:
-            default: true
-          exposedPort: 80
-        websecure:
-          port: 8443
-          expose:
-            default: true
-          exposedPort: 443
-        frpsUi:
-          port: ${FRPS_UI_BIND_PORT}
-          expose:
-            default: true
-          exposedPort: ${FRPS_UI_BIND_PORT}
-          protocol: TCP
-        frpsWs:
-          port: ${FRPS_WS_BIND_PORT}
-          expose:
-            default: true
-          exposedPort: ${FRPS_WS_BIND_PORT}
-          protocol: TCP
+    ports:
+      web:
+        port: 8000
+        expose:
+          default: true
+        exposedPort: 80
+      websecure:
+        port: 8443
+        expose:
+          default: true
+        exposedPort: 443
+      frpsUi:
+        port: ${FRPS_UI_BIND_PORT}
+        expose:
+          default: true
+        exposedPort: ${FRPS_UI_BIND_PORT}
+        protocol: TCP
+      frpsWs:
+        port: ${FRPS_WS_BIND_PORT}
+        expose:
+          default: true
+        exposedPort: ${FRPS_WS_BIND_PORT}
+        protocol: TCP
 
-      additionalArguments:
-        - "--entrypoints.websecure.http.tls=true"
+    additionalArguments:
+      - "--entrypoints.websecure.http.tls=true"
 EOF
 
     cat > "${KUBELET_CONFIG_PATH}" << EOF
@@ -757,7 +755,7 @@ EOF
     # 校验 Service 暴露的端口（80/443/7001/7002）
     log_info "Checking Service/traefik exposes required ports (80, 443, ${FRPS_UI_BIND_PORT}, ${FRPS_WS_BIND_PORT})..."
     local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
-    if ! run_with_retry "${ports_cmd} \vert{} grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} \vert{} grep -Eq '\b${FRPS_UI_BIND_PORT}\b' && ${ports_cmd} \vert{} grep -Eq '\b${FRPS_WS_BIND_PORT}\b'" \
+    if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b${FRPS_UI_BIND_PORT}\b' && ${ports_cmd} | grep -Eq '\b${FRPS_WS_BIND_PORT}\b'" \
         "Service/traefik to expose 80,443,${FRPS_UI_BIND_PORT},${FRPS_WS_BIND_PORT}" 240 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
         diagnose_traefik_values_merge
