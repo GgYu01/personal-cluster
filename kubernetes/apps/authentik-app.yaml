@@ -35,7 +35,7 @@ spec:
             registry: docker.io
             repository: bitnami/postgresql
             # Keep a compatible tag; Bitnami tags change frequently, a major version pin is safer
-            tag: 18.0.8
+            tag: 18.0.0
           auth:
             username: "authentik"
             database: "authentik"
@@ -70,7 +70,7 @@ spec:
           image:
             registry: docker.io
             repository: bitnami/redis
-            tag: 23.1.1
+            tag: 8.2.2
   destination: 
     server: https://kubernetes.default.svc
     namespace: authentik
