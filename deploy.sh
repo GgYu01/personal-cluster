@@ -57,7 +57,7 @@ readonly LOG_FILE="$(pwd)/${LOG_FILE_NAME}"
 readonly ARGOCD_FQDN="argocd.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
 readonly PORTAL_FQDN="portal.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"  # portal.core01.prod.gglohh.top
 readonly KUBELET_CONFIG_PATH="/etc/rancher/k3s/kubelet.config"
-readonly AUTHENTIK_HEALTH_TIMEOUT="${AUTHENTIK_HEALTH_TIMEOUT:-600}"
+readonly AUTHENTIK_HEALTH_TIMEOUT="${AUTHENTIK_HEALTH_TIMEOUT:-500}"
 
 # --- [START OF PASSWORD FIX] ---
 # Statically define the bcrypt hash for the password 'password'.
