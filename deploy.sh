@@ -36,8 +36,12 @@ readonly CF_API_TOKEN="vi7hkPq4FwD5ttV4dvR_IoNVEJSphydRPcT0LVD-"
 readonly WILDCARD_FQDN="*.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"   # *.core01.prod.gglohh.top
 readonly CF_PROXIED="false"
 
-# --- Software Versions ---
+# --- Software Versions --- 
 readonly K3S_VERSION="v1.33.3+k3s1"
+
+# --- FRPS entry ports (dual-instance) ---
+readonly FRPS_UI_BIND_PORT=7001
+readonly FRPS_WS_BIND_PORT=7002
 
 # --- Internal Settings ---
 readonly ETCD_PROJECT_NAME="personal-cluster-etcd"
@@ -376,6 +380,51 @@ diagnose_k3s_failure() {
     echo "==== [DIAG END] K3s failure diagnostics ===="
 }
 
+# --- [NEW] Journal namespace helpers (best-effort, non-disruptive to other services) ---
+
+supports_journal_namespace() {
+  # Return 0 if journalctl supports --namespace option
+  journalctl --help 2>/dev/null | grep -q -- '--namespace'
+}
+
+configure_k3s_log_namespace() {
+  # Put k3s into its own journald namespace (if supported), then restart k3s only
+  local ns="k3s-stack"
+  if ! supports_journal_namespace; then
+    log_warn "journalctl does not support --namespace on this system. Will not attempt per-service journal cleanup."
+    return 0
+  fi
+
+  log_info "Configuring k3s.service to use journald LogNamespace='${ns}' ..."
+  mkdir -p /etc/systemd/system/k3s.service.d
+  cat > /etc/systemd/system/k3s.service.d/10-log-namespace.conf <<EOF
+# k3s log isolation (do not touch other services' logs)
+[Service]
+LogNamespace=${ns}
+EOF
+
+  systemctl daemon-reload
+  if systemctl is-active --quiet k3s; then
+    log_info "Restarting k3s.service to apply LogNamespace..."
+    systemctl restart k3s
+  fi
+  log_success "k3s.service LogNamespace configured."
+}
+
+purge_k3s_namespace_journal() {
+  # Clean only the k3s journald namespace; preserve unrelated services' logs
+  local ns="k3s-stack"
+  if supports_journal_namespace; then
+    log_info "Vacuum journald logs for namespace '${ns}' only..."
+    journalctl --namespace="${ns}" --rotate || true
+    # Keep only ultra-recent (effectively clears history)
+    journalctl --namespace="${ns}" --vacuum-time=1s || true
+    log_success "Journald logs in namespace '${ns}' cleaned."
+  else
+    log_warn "No journald namespace support; skip targeted journal vacuum. Using runtime anchor for clean diagnostics."
+  fi
+}
+
 # --- [SECTION 3: DEPLOYMENT FUNCTIONS] ---
 
 function perform_system_cleanup() {
@@ -491,11 +540,17 @@ spec:
       websecure:
         port: 8443
         exposedPort: 443
-      frps:
-        port: 7000
+      frpsUi:
+        port: ${FRPS_UI_BIND_PORT}
         expose:
           default: true
-        exposedPort: 7000
+        exposedPort: ${FRPS_UI_BIND_PORT}
+        protocol: TCP
+      frpsWs:
+        port: ${FRPS_WS_BIND_PORT}
+        expose:
+          default: true
+        exposedPort: ${FRPS_WS_BIND_PORT}
         protocol: TCP
 
     additionalArguments:
@@ -582,67 +637,71 @@ EOF
     fi
     log_success "Traefik Deployment is Ready." 
 
-    log_info "Checking Service/traefik exposes required ports (80, 443, 7000)..."
+    configure_k3s_log_namespace
+    purge_k3s_namespace_journal
+
+    log_info "Checking Service/traefik exposes required ports (80, 443, ${FRPS_UI_BIND_PORT}, ${FRPS_WS_BIND_PORT})..."
     local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
-    if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b7000\b'" \
-        "Service/traefik to expose 80,443,7000" 180 10; then
+    if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b${FRPS_UI_BIND_PORT}\b' && ${ports_cmd} | grep -Eq '\b${FRPS_WS_BIND_PORT}\b'" \
+        "Service/traefik to expose 80,443,${FRPS_UI_BIND_PORT},${FRPS_WS_BIND_PORT}" 180 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
         diagnose_traefik_values_merge
         log_error_and_exit "Traefik Service does not expose required ports."
     fi
-    log_success "Traefik Service exposes 80/443/7000."
+    log_success "Traefik Service exposes 80/443/${FRPS_UI_BIND_PORT}/${FRPS_WS_BIND_PORT}."
 }
 
 # --- New: verify frps entryPoint & wildcard TLS readiness ---
 function verify_frps_entrypoint_and_tls() {
-    log_step 6 "Verify frps entryPoint listening and wildcard TLS readiness"
+    log_step 6 "Verify frps UI/WS entryPoints and wildcard TLS readiness"
 
-    # 1) Verify IngressRouteTCP exists and references entryPoint 'frps'
-    if ! run_with_retry "kubectl -n frp-system get ingressroutetcp frps-tcp-ingress >/dev/null 2>&1" "IngressRouteTCP 'frps-tcp-ingress' present" 120 5; then
-        log_info "Dumping IngressRouteTCP list in frp-system:"
+    # 1) IngressRouteTCP existence
+    if ! run_with_retry "kubectl -n frp-system get ingressroutetcp frps-ui-tcp-ingress >/dev/null 2>&1" "IngressRouteTCP 'frps-ui-tcp-ingress' present" 180 5; then
         kubectl -n frp-system get ingressroutetcp -o yaml || true
-        log_error_and_exit "IngressRouteTCP 'frps-tcp-ingress' not found."
+        log_error_and_exit "IngressRouteTCP 'frps-ui-tcp-ingress' not found."
     fi
-    log_success "IngressRouteTCP 'frps-tcp-ingress' is present."
+    if ! run_with_retry "kubectl -n frp-system get ingressroutetcp frps-ws-tcp-ingress >/dev/null 2>&1" "IngressRouteTCP 'frps-ws-tcp-ingress' present" 180 5; then
+        kubectl -n frp-system get ingressroutetcp -o yaml || true
+        log_error_and_exit "IngressRouteTCP 'frps-ws-tcp-ingress' not found."
+    fi
+    log_success "Both IngressRouteTCP (UI/WS) are present."
 
-    # 2) Verify Traefik service exposes 7000 and external TCP is reachable
-    #    This uses a TCP connect check against VPS_IP:7000
-    local tcp_check_cmd="timeout 2 bash -lc '</dev/tcp/${VPS_IP}/7000' >/dev/null 2>&1"
-    if ! run_with_retry "${tcp_check_cmd}" "External TCP connectivity to ${VPS_IP}:7000" 180 5; then
-        log_info "Failed TCP connect to ${VPS_IP}:7000. Dumping diagnostics:"
+    # 2) External TCP reachability (UI/WS control planes)
+    local tcp_check_ui="timeout 2 bash -lc '</dev/tcp/${VPS_IP}/${FRPS_UI_BIND_PORT}' >/dev/null 2>&1"
+    local tcp_check_ws="timeout 2 bash -lc '</dev/tcp/${VPS_IP}/${FRPS_WS_BIND_PORT}' >/dev/null 2>&1"
+    if ! run_with_retry "${tcp_check_ui}" "External TCP connectivity to ${VPS_IP}:${FRPS_UI_BIND_PORT}" 180 5; then
         kubectl -n kube-system get svc traefik -o wide || true
-        kubectl -n kube-system get pods -l app.kubernetes.io/name=traefik -o wide || true
-        kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=100 || true
-        log_warn "Possible external firewall or provider-level filtering on port 7000."
-        log_error_and_exit "frps entryPoint is not externally reachable on ${VPS_IP}:7000."
+        kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=120 || true
+        log_error_and_exit "frps UI entryPoint not reachable on ${VPS_IP}:${FRPS_UI_BIND_PORT}."
     fi
-    log_success "frps entryPoint is externally reachable on ${VPS_IP}:7000."
+    if ! run_with_retry "${tcp_check_ws}" "External TCP connectivity to ${VPS_IP}:${FRPS_WS_BIND_PORT}" 180 5; then
+        kubectl -n kube-system get svc traefik -o wide || true
+        kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=120 || true
+        log_error_and_exit "frps WS entryPoint not reachable on ${VPS_IP}:${FRPS_WS_BIND_PORT}."
+    fi
+    log_success "frps UI/WS entryPoints are externally reachable."
 
-    # 3) Verify wildcard Certificate in frp-system namespace
-    #    Name should match your manifest (e.g. wildcard-core01-prod-gglohh-top)
+    # 3) Verify wildcard certificate readiness (unchanged)
     local cert_name="wildcard-core01-prod-gglohh-top"
-    if ! kubectl -n frp-system get certificate "${cert_name}" >/dev/null 2>&1; then
-        log_warn "Certificate '${cert_name}' not found in namespace 'frp-system'. Skipping Ready wait."
-        log_info "List certificates in frp-system for reference:"
-        kubectl -n frp-system get certificate || true
-    else
+    if kubectl -n frp-system get certificate "${cert_name}" >/dev/null 2>&1; then
         if ! run_with_retry "kubectl -n frp-system wait --for=condition=Ready certificate/${cert_name} --timeout=100s" "Wildcard Certificate '${cert_name}' to be Ready" 320 10; then
-            log_info "Certificate not Ready. Dumping certificate and cert-manager logs:"
             kubectl -n frp-system describe certificate "${cert_name}" || true
             kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=100 || true
             log_error_and_exit "Wildcard certificate '${cert_name}' not Ready."
         fi
         log_success "Wildcard certificate '${cert_name}' is Ready."
+    else
+        log_warn "Certificate '${cert_name}' not found in 'frp-system'. Skipping Ready wait."
+        kubectl -n frp-system get certificate || true
     fi
 
-    # 4) Verify TLS Secret exists for Traefik IngressRoute usage
+    # 4) TLS Secret exists
     local tls_secret="wildcard-core01-prod-gglohh-top-tls"
     if ! run_with_retry "kubectl -n frp-system get secret ${tls_secret} >/dev/null 2>&1" "TLS Secret '${tls_secret}' present in frp-system" 120 5; then
-        log_info "Dumping secrets in frp-system:"
         kubectl -n frp-system get secrets || true
         log_error_and_exit "TLS Secret '${tls_secret}' is missing in frp-system."
     fi
-    log_success "TLS Secret '${tls_secret}' present in frp-system (for HTTPS on wildcard)."
+    log_success "TLS Secret '${tls_secret}' present in frp-system."
 }
 
 function bootstrap_gitops() {

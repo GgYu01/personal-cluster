@@ -3,28 +3,55 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: frps-config
+  name: frps-ui-config
   namespace: frp-system
 data:
   frps.toml: |
-    # --- Core bind ---
-    bindPort = 7000
+    # --- Core bind (UI) ---
+    bindPort = 7001
 
-    # --- Auth (insecure by design) ---
+    # --- Auth (simple) ---
     [auth]
     method = "token"
-    token = "password"  # as requested: simple, low-security
+    token = "password"
 
     # --- Subdomain host for HTTP vhosts ---
     subdomainHost = "core01.prod.gglohh.top"
 
-    # --- HTTP vhost for browser side (Traefik terminates TLS at 443) ---
+    # --- HTTP vhost for browser side (TLS by Traefik) ---
     vhostHTTPPort = 8080
-    # vhostHTTPSPort is not needed because TLS is terminated by Traefik
 
-    # --- Web dashboard (insecure by design) ---
+    # --- Web dashboard (UI) ---
     [webServer]
     addr = "0.0.0.0"
     port = 7500
+    user = "admin"
+    password = "password"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frps-ws-config
+  namespace: frp-system
+data:
+  frps.toml: |
+    # --- Core bind (WS) ---
+    bindPort = 7002
+
+    # --- Auth (simple) ---
+    [auth]
+    method = "token"
+    token = "password"
+
+    # --- Subdomain host for HTTP vhosts ---
+    subdomainHost = "core01.prod.gglohh.top"
+
+    # --- HTTP vhost for WS side (TLS by Traefik) ---
+    vhostHTTPPort = 8081
+
+    # --- Web dashboard (WS) ---
+    [webServer]
+    addr = "0.0.0.0"
+    port = 7501
     user = "admin"
     password = "password"

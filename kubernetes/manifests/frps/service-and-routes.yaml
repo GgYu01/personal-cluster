@@ -2,50 +2,103 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: frps-service
+  name: frps-ui-service
   namespace: frp-system
 spec:
   selector:
-    app: frps
+    app: frps-ui
   ports:
   - name: frps-bind
-    port: 7000
+    port: 7001
+    targetPort: 7001
   - name: vhost-http
     port: 8080
+    targetPort: 8080
   - name: dashboard
     port: 7500
+    targetPort: 7500
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frps-ws-service
+  namespace: frp-system
+spec:
+  selector:
+    app: frps-ws
+  ports:
+  - name: frps-bind
+    port: 7002
+    targetPort: 7002
+  - name: vhost-http
+    port: 8081
+    targetPort: 8081
+  - name: dashboard
+    port: 7501
+    targetPort: 7501
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRouteTCP
 metadata:
-  name: frps-tcp-ingress
+  name: frps-ui-tcp-ingress
   namespace: frp-system
 spec:
   entryPoints:
-    - frps  # must exist in Traefik static config; deploy.sh will ensure it
+    - frpsUi
   routes:
   - match: HostSNI(`*`)
     services:
-    - name: frps-service
-      port: 7000
+    - name: frps-ui-service
+      port: 7001
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: frps-ws-tcp-ingress
+  namespace: frp-system
+spec:
+  entryPoints:
+    - frpsWs
+  routes:
+  - match: HostSNI(`*`)
+    services:
+    - name: frps-ws-service
+      port: 7002
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
-metadata: 
-  name: frps-http-ingress
+metadata:
+  name: frps-ws-http-ingress
   namespace: frp-system
   annotations:
-    # [ADD START]
     argocd.argoproj.io/sync-wave: "1"
-    # [ADD END]
 spec:
-  entryPoints: 
+  entryPoints:
     - websecure
-  routes: 
+  routes:
   - kind: Rule
-    match: HostRegexp(`e-{subdomain:[a-z0-9-]+}\.core01\.prod\.gglohh\.top`)
-    services: 
-    - name: frps-service
+    match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`) && Headers(`Upgrade`,`websocket`)
+    services:
+    - name: frps-ws-service
+      port: 8081
+  tls:
+    secretName: wildcard-core01-prod-gglohh-top-tls
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: frps-ui-http-ingress
+  namespace: frp-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  entryPoints:
+    - websecure
+  routes:
+  - kind: Rule
+    match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`) && !Headers(`Upgrade`,`websocket`)
+    services:
+    - name: frps-ui-service
       port: 8080
-  tls: 
+  tls:
     secretName: wildcard-core01-prod-gglohh-top-tls

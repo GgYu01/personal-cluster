@@ -2,35 +2,69 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: frps-server
+  name: frps-ui-server
   namespace: frp-system
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: frps
+      app: frps-ui
   template:
     metadata:
       labels:
-        app: frps
+        app: frps-ui
     spec:
       containers:
-      - name: frps
+      - name: frps-ui
         image: snowdreamtech/frps:0.58.1
-        args: ["-c", "/etc/frp/frps.toml"]
+        args: ["-c", "/etc/frp/frps.toml"]  # static config
         ports:
-        - containerPort: 7000
+        - containerPort: 7001
           name: frps-bind
         - containerPort: 8080
           name: vhost-http
         - containerPort: 7500
           name: dashboard
-        # envFrom removed (no longer needed)
         volumeMounts:
-        - name: config-volume
+        - name: config-ui
           mountPath: /etc/frp
           readOnly: true
       volumes:
-      - name: config-volume
+      - name: config-ui
         configMap:
-          name: frps-config
+          name: frps-ui-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frps-ws-server
+  namespace: frp-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frps-ws
+  template:
+    metadata:
+      labels:
+        app: frps-ws
+    spec:
+      containers:
+      - name: frps-ws
+        image: snowdreamtech/frps:0.58.1
+        args: ["-c", "/etc/frp/frps.toml"]  # static config
+        ports:
+        - containerPort: 7002
+          name: frps-bind
+        - containerPort: 8081
+          name: vhost-http
+        - containerPort: 7501
+          name: dashboard
+        volumeMounts:
+        - name: config-ws
+          mountPath: /etc/frp
+          readOnly: true
+      volumes:
+      - name: config-ws
+        configMap:
+          name: frps-ws-config
