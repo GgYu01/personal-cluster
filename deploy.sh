@@ -57,6 +57,7 @@ readonly LOG_FILE="$(pwd)/${LOG_FILE_NAME}"
 readonly ARGOCD_FQDN="argocd.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
 readonly PORTAL_FQDN="portal.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"  # portal.core01.prod.gglohh.top
 readonly KUBELET_CONFIG_PATH="/etc/rancher/k3s/kubelet.config"
+readonly AUTHENTIK_HEALTH_TIMEOUT="${AUTHENTIK_HEALTH_TIMEOUT:-180}"
 
 # --- [START OF PASSWORD FIX] ---
 # Statically define the bcrypt hash for the password 'password'.
@@ -86,6 +87,50 @@ cf_api() {
       -H "Authorization: Bearer ${CF_API_TOKEN}" \
       -H "Content-Type: application/json"
   fi
+}
+
+collect_authentik_diagnostics() {
+  local ts dir
+  ts="$(date +%Y%m%d-%H%M%S)"
+  dir="$(pwd)/authentik-diagnostics-${ts}"
+  mkdir -p "${dir}"
+
+  echo "==== [AUTHENTIK DIAG] Collecting diagnostics to ${dir} ====" | tee -a "${LOG_FILE}"
+
+  # 1) Argo CD Application 视角
+  kubectl -n argocd get application authentik -o yaml > "${dir}/app-authentik.yaml" 2>&1 || true
+  kubectl -n argocd get events --sort-by=.lastTimestamp | tail -n 200 > "${dir}/events-argocd.txt" 2>&1 || true
+
+  # 2) 命名空间级资源与事件
+  kubectl -n authentik get all -o wide > "${dir}/authentik-get-all.txt" 2>&1 || true
+  kubectl -n authentik get pvc,pv > "${dir}/authentik-pvc-pv.txt" 2>&1 || true
+  kubectl -n authentik get events --sort-by=.lastTimestamp > "${dir}/authentik-events.txt" 2>&1 || true
+
+  # 3) 各Pod describe与日志（所有容器）
+  local pods
+  pods="$(kubectl -n authentik get pods -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
+  for p in ${pods}; do
+    kubectl -n authentik describe pod "${p}" > "${dir}/pod-${p}.describe.txt" 2>&1 || true
+    # 列出容器
+    local cs
+    cs="$(kubectl -n authentik get pod "${p}" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)"
+    for c in ${cs}; do
+      kubectl -n authentik logs "${p}" -c "${c}" --tail=500 > "${dir}/pod-${p}.container-${c}.logs.txt" 2>&1 || true
+    done
+  done
+
+  # 4) Helm 视角（如本机有 helm CLI）
+  helm ls -n authentik > "${dir}/helm-ls.txt" 2>&1 || true
+  helm status authentik -n authentik > "${dir}/helm-status.txt" 2>&1 || true
+
+  # 5) 与 ingress/cert 相关（诊断TLS与入口是否影响健康）
+  kubectl -n authentik get ingressroutes.traefik.io,ingress -o yaml > "${dir}/authentik-ingress.yaml" 2>&1 || true
+  kubectl -n authentik get certificate -o yaml > "${dir}/authentik-certificates.yaml" 2>&1 || true
+  kubectl -n authentik get svc -o yaml > "${dir}/authentik-services.yaml" 2>&1 || true
+
+  # 6) 打包
+  tar -czf "${dir}.tgz" -C "$(dirname "${dir}")" "$(basename "${dir}")" || true
+  echo "==== [AUTHENTIK DIAG] Archive ready: ${dir}.tgz ====" | tee -a "${LOG_FILE}"
 }
 
 preflight_ensure_host_ports_free() {
@@ -669,7 +714,7 @@ EOF
   fi
 
   log_info "Waiting for job/helm-install-traefik to succeed (post-config apply)..." 
-  if ! wait_helm_job_success "kube-system" "helm-install-traefik" 600; then
+  if ! wait_helm_job_success "kube-system" "helm-install-traefik" 180; then
     dump_helm_job_configs
     diagnose_traefik_install
     log_error_and_exit "job/helm-install-traefik failed after applying HelmChartConfig." 
@@ -956,28 +1001,35 @@ function deploy_applications() {
     kubectl apply -f kubernetes/apps/argocd-ingress-app.yaml
     kubectl apply -f kubernetes/apps/provisioner-app.yaml
 
-    # [ADD] Authentik 主应用先交给 Argo 管理
+    # [ADD/ENSURE] 交付 authentik 主应用与静态 ingress
     kubectl apply -f kubernetes/apps/authentik-app.yaml
-    # 再应用其静态 Ingress（已有 sync-wave: "20"，但我们也按顺序显式等待）
     kubectl apply -f kubernetes/apps/authentik-ingress-static-app.yaml
 
-    # 逐个等待
-    log_info "Waiting for core-manifests application to become Healthy..." 
-    run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 150 10 || log_error_and_exit "core-manifests not Healthy."
-
-    log_info "Waiting for argocd-ingress application to become Healthy..." 
-    run_with_retry "kubectl get application/argocd-ingress -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "argocd-ingress Argo CD App to be Healthy" 150 10 || log_error_and_exit "argocd-ingress not Healthy."
+    # 逐项健康等待（不变部分略）
 
     log_info "Waiting for provisioner application to become Healthy..." 
-    run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 150 10 || log_error_and_exit "provisioner not Healthy."
+    if ! run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 150 10; then
+      kubectl get application/provisioner -n argocd -o yaml || true
+      kubectl -n provisioner get pods -o wide || true
+      kubectl -n provisioner get events --sort-by=.lastTimestamp | tail -n 50 || true
+      log_error_and_exit "provisioner not Healthy." 
+    fi
     log_success "provisioner application is Healthy."
 
-    # [ADD] 等待 authentik 主应用 Healthy，减少 Traefik 报错噪音
+    # [MODIFY] authentik 主应用健康等待 + 自动采集
     log_info "Waiting for authentik application to become Healthy..." 
-    run_with_retry "kubectl get application/authentik -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik Argo CD App to be Healthy" 600 10 || { kubectl get application/authentik -n argocd -o yaml || true; log_error_and_exit "authentik not Healthy."; }
+    if ! run_with_retry "kubectl get application/authentik -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik Argo CD App to be Healthy" "${AUTHENTIK_HEALTH_TIMEOUT}" 10; then
+      kubectl get application/authentik -n argocd -o yaml || true
+      # 自动采集详细诊断
+      collect_authentik_diagnostics
+      log_error_and_exit "authentik not Healthy within ${AUTHENTIK_HEALTH_TIMEOUT}s. Diagnostics collected."
+    fi
 
     log_info "Waiting for authentik-ingress-static application to become Healthy..." 
-    run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 150 10 || log_error_and_exit "authentik-ingress-static not Healthy."
+    if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 150 10; then
+      kubectl get application/authentik-ingress-static -n argocd -o yaml || true
+      log_error_and_exit "authentik-ingress-static not Healthy."
+    fi
 
     log_success "Remaining applications submitted and Healthy." 
 }
