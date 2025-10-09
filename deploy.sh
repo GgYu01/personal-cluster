@@ -223,6 +223,10 @@ wait_helm_job_success() {
     if ! timeout "${timeout_s}s" bash -lc "until [[ \$(kubectl -n ${ns} get job ${job} -o jsonpath='{.status.succeeded}' 2>/dev/null) == 1 ]]; do sleep 5; done"; then
         log_warn "Timeout waiting Job ${ns}/${job} to succeed."
         print_job_pod_logs "${ns}" "${job}"
+        # [ADD] dump merged values for forensic
+        if [[ "${job}" == "helm-install-traefik" ]]; then
+          dump_helm_job_configs
+        fi
         return 1
     fi
     log_success "Job ${ns}/${job} succeeded."
@@ -439,7 +443,7 @@ dump_helm_job_configs() {
   local ns="kube-system"; local job="helm-install-traefik"
   echo "==== [DIAG] Dump Helm job values files (/config) ===="
   local pod
-  pod="$(kubectl -n "${ns}" get pods --selector=job-name=${job} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null \vert{}\vert{} true)"
+  pod="$(kubectl -n "${ns}" get pods --selector=job-name=${job} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
   if [[ -z "${pod}" ]]; then
     echo "(helm job pod not found)"
     return 0
@@ -541,39 +545,40 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
-    providers:
-      kubernetesCRD:
-        enabled: true
-      kubernetesIngress:
-        publishedService:
+    traefik:
+      providers:
+        kubernetesCRD:
           enabled: true
+        kubernetesIngress:
+          publishedService:
+            enabled: true
 
-    ports:
-      web:
-        port: 8000
-        expose:
-          default: true
-        exposedPort: 80
-      websecure:
-        port: 8443
-        expose:
-          default: true
-        exposedPort: 443
-      frpsUi:
-        port: ${FRPS_UI_BIND_PORT}
-        expose:
-          default: true
-        exposedPort: ${FRPS_UI_BIND_PORT}
-        protocol: TCP
-      frpsWs:
-        port: ${FRPS_WS_BIND_PORT}
-        expose:
-          default: true
-        exposedPort: ${FRPS_WS_BIND_PORT}
-        protocol: TCP
+      ports:
+        web:
+          port: 8000
+          expose:
+            default: true
+          exposedPort: 80
+        websecure:
+          port: 8443
+          expose:
+            default: true
+          exposedPort: 443
+        frpsUi:
+          port: ${FRPS_UI_BIND_PORT}
+          expose:
+            default: true
+          exposedPort: ${FRPS_UI_BIND_PORT}
+          protocol: TCP
+        frpsWs:
+          port: ${FRPS_WS_BIND_PORT}
+          expose:
+            default: true
+          exposedPort: ${FRPS_WS_BIND_PORT}
+          protocol: TCP
 
-    additionalArguments:
-      - "--entrypoints.websecure.http.tls=true"
+      additionalArguments:
+        - "--entrypoints.websecure.http.tls=true"
 EOF
 
   kubectl -n kube-system apply -f /tmp/traefik-helmchartconfig.yaml
@@ -623,39 +628,40 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
-    providers:
-      kubernetesCRD:
-        enabled: true
-      kubernetesIngress:
-        publishedService:
+    traefik:
+      providers:
+        kubernetesCRD:
           enabled: true
+        kubernetesIngress:
+          publishedService:
+            enabled: true
 
-    ports:
-      web:
-        port: 8000
-        expose:
-          default: true
-        exposedPort: 80
-      websecure:
-        port: 8443
-        expose:
-          default: true
-        exposedPort: 443
-      frpsUi:
-        port: ${FRPS_UI_BIND_PORT}
-        expose:
-          default: true
-        exposedPort: ${FRPS_UI_BIND_PORT}
-        protocol: TCP
-      frpsWs:
-        port: ${FRPS_WS_BIND_PORT}
-        expose:
-          default: true
-        exposedPort: ${FRPS_WS_BIND_PORT}
-        protocol: TCP
+      ports:
+        web:
+          port: 8000
+          expose:
+            default: true
+          exposedPort: 80
+        websecure:
+          port: 8443
+          expose:
+            default: true
+          exposedPort: 443
+        frpsUi:
+          port: ${FRPS_UI_BIND_PORT}
+          expose:
+            default: true
+          exposedPort: ${FRPS_UI_BIND_PORT}
+          protocol: TCP
+        frpsWs:
+          port: ${FRPS_WS_BIND_PORT}
+          expose:
+            default: true
+          exposedPort: ${FRPS_WS_BIND_PORT}
+          protocol: TCP
 
-    additionalArguments:
-      - "--entrypoints.websecure.http.tls=true"
+      additionalArguments:
+        - "--entrypoints.websecure.http.tls=true"
 EOF
 
     cat > "${KUBELET_CONFIG_PATH}" << EOF

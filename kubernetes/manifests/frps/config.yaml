@@ -8,18 +8,13 @@ data:
     # Core bind (UI)
     bindPort = 7001
 
-    # Auth (simple)
     [auth]
     method = "token"
     token = "password"
 
-    # Subdomain host for HTTP vhosts
     subdomainHost = "core01.prod.gglohh.top"
-
-    # HTTP vhost port (TLS terminated by Traefik)
     vhostHTTPPort = 8080
 
-    # Web dashboard (UI)
     [webServer]
     addr = "0.0.0.0"
     port = 7500
@@ -36,18 +31,13 @@ data:
     # Core bind (WS)
     bindPort = 7002
 
-    # Auth (simple)
     [auth]
     method = "token"
     token = "password"
 
-    # Subdomain host for HTTP vhosts
     subdomainHost = "core01.prod.gglohh.top"
-
-    # HTTP vhost port (TLS terminated by Traefik)
     vhostHTTPPort = 8081
 
-    # Web dashboard (WS)
     [webServer]
     addr = "0.0.0.0"
     port = 7501
