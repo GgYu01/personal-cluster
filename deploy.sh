@@ -115,40 +115,55 @@ preflight_ensure_host_ports_free() {
 }
 
 verify_servicelb_bindings_and_tcp_443() {
-  # Verify svclb-traefik pods and external TCP reachability on 443
-  log_info "Verifying svclb-traefik pods and TCP:443 external reachability..."
-  # Wait for svclb pods created
-  if ! timeout 150 bash -lc 'until kubectl -n kube-system get pods -l "app=svclb-traefik" --no-headers 2>/dev/null | grep -q .; do echo "    ...waiting svclb-traefik"; sleep 3; done'; then
-    kubectl -n kube-system get pods -l "app=svclb-traefik" -o wide || true
-    log_error_and_exit "svclb-traefik pods not created; ServiceLB may be disabled or failed."
+  # Gate on final goal: external TCP 443 must be reachable on ${VPS_IP}.
+  # ServiceLB (svclb-traefik) presence is diagnostic-only; do not hard-fail on its absence.
+  log_info "Verifying Traefik Service type and external TCP:443 reachability..."
+
+  # 1) Detect Service type
+  local svc_type
+  svc_type="$(kubectl -n kube-system get svc traefik -o jsonpath='{.spec.type}' 2>/dev/null || true)"
+  if [[ -z "${svc_type}" ]]; then
+    kubectl -n kube-system get svc traefik -o yaml || true
+    log_error_and_exit "Service 'kube-system/traefik' not found; Traefik installation may be incomplete."
   fi
-  kubectl -n kube-system get pods -l "app=svclb-traefik" -o wide || true
+  log_info "Traefik Service type: ${svc_type}"
 
-  # Check pod status
-  local bad=0
-  if kubectl -n kube-system get pods -l "app=svclb-traefik" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}' 2>/dev/null | egrep -v 'Running|Succeeded' | grep -q .; then
-    log_warn "Some svclb-traefik pods are not Running:"
-    kubectl -n kube-system get pods -l "app=svclb-traefik" -o wide
-    bad=1
+  # 2) If LoadBalancer, try to locate svclb pods (diagnostic-only)
+  if [[ "${svc_type}" == "LoadBalancer" ]]; then
+    log_info "Waiting for svclb-traefik pods (diagnostic-only, 150s timeout)..."
+    local found=0
+    if timeout 150 bash -lc 'for i in $(seq 1 50); do \
+        P=$(kubectl -n kube-system get pods -o jsonpath="{range .items[*]}{.metadata.name}{\"\\n\"}{end}" 2>/dev/null | grep -E "^svclb-traefik" || true); \
+        if [[ -n "$P" ]]; then echo "$P"; exit 0; fi; \
+        echo "    ...waiting svclb-traefik"; sleep 3; done; exit 1'; then
+      found=1
+    fi
+
+    if (( found == 1 )); then
+      kubectl -n kube-system get pods -o wide | grep -E "^svclb-traefik" || true
+      # Dump short logs for diagnostics
+      for p in $(kubectl -n kube-system get pods -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n' | grep -E "^svclb-traefik" || true); do
+        echo "--- [DIAG] svclb pod logs (pod: ${p}) ---"
+        kubectl -n kube-system logs "${p}" --tail=120 2>/dev/null || true
+      done
+    else
+      log_warn "svclb-traefik pods not observed within 150s. ServiceLB may be disabled or pending. Proceeding to final TCP:443 check."
+    fi
+  else
+    log_info "Service type is not LoadBalancer; K3s ServiceLB won't create svclb-* pods (this can be intentional)."
   fi
 
-  # Dump failing containers logs (port 443 binding is commonly named lb-443)
-  for p in $(kubectl -n kube-system get pods -l "app=svclb-traefik" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-    echo "--- [DIAG] svclb pod logs (pod: ${p}) ---"
-    kubectl -n kube-system logs "${p}" --tail=120 2>/dev/null || true
-  done
-
-  # External TCP reachability to 443
+  # 3) Final hard gate: external TCP:443 reachability
   local tcp_check_443="timeout 2 bash -lc '</dev/tcp/${VPS_IP}/443' >/dev/null 2>&1"
   if ! run_with_retry "${tcp_check_443}" "External TCP connectivity to ${VPS_IP}:443" 150 5; then
-    log_error_and_exit "External TCP 443 is not reachable on ${VPS_IP}. Most likely ServiceLB failed to bind 443 on host (port conflict) or iptables/NAT issue."
+    # Dump more diagnostics to assist troubleshooting
+    log_warn "TCP:443 not reachable. Dumping Traefik Service details and kube-system pods for diagnostics."
+    kubectl -n kube-system get svc traefik -o yaml || true
+    kubectl -n kube-system get pods -o wide || true
+    log_error_and_exit "External TCP 443 is not reachable on ${VPS_IP}. Ensure either ServiceLB is functional (Service.type=LoadBalancer) or an external LB/fronting proxy provides TCP:443 to Traefik."
   fi
 
-  if (( bad == 1 )); then
-    log_warn "svclb-traefik pods had issues; check logs above. Proceeding since TCP:443 is reachable now."
-  else
-    log_success "svclb-traefik pods Running and TCP:443 reachable."
-  fi
+  log_success "External TCP:443 is reachable on ${VPS_IP}."
 }
 
 wait_apiserver_ready() { 
