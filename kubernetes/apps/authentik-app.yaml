@@ -1,19 +1,18 @@
-# kubernetes/apps/authentik-app.yaml
-
+# File: kubernetes/apps/authentik-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
-metadata: 
+metadata:
   name: authentik
   namespace: argocd
-  annotations: 
+  annotations:
     argocd.argoproj.io/sync-wave: "10"
-spec: 
+spec:
   project: default
-  source: 
+  source:
     repoURL: https://charts.goauthentik.io
     chart: authentik
     targetRevision: 2025.8.4
-    helm: 
+    helm:
       releaseName: authentik
       values: |
         # ========= Authentik core =========
@@ -21,21 +20,57 @@ spec:
           secret_key: "a_very_long_and_random_secret_key_change_me"
           error_reporting:
             enabled: false
-          # [ADD] Wire application DB password to embedded PostgreSQL
           postgresql:
+            # Keep app -> DB password synced with subchart
             password: "a_strong_database_password_change_me"
+          redis:
+            # No password as you configured
+            password: ""
 
         # ========= PostgreSQL (embedded) =========
         postgresql:
           enabled: true
+          # Force Bitnami image to match Bitnami subchart expectations
+          image:
+            registry: docker.io
+            repository: bitnami/postgresql
+            # Keep a compatible tag; Bitnami tags change frequently, a major version pin is safer
+            tag: 17
           auth:
+            username: "authentik"
+            database: "authentik"
             password: "a_strong_database_password_change_me"
+          primary:
+            # Keep basic extra args like your chart default, no changes required
+            args:
+              - -c
+              - config_file=/bitnami/postgresql/conf/postgresql.conf
+              - -c
+              - hba_file=/bitnami/postgresql/conf/pg_hba.conf
+            # Optional but safe defaults; can be omitted if you prefer chart defaults
+            configuration: |
+              listen_addresses = '*'
+              port = '5432'
+              wal_level = 'replica'
+              fsync = 'on'
+              hot_standby = 'on'
+              log_connections = 'false'
+              log_disconnections = 'false'
+              log_hostname = 'false'
+              client_min_messages = 'error'
+              include_dir = 'conf.d'
 
         # ========= Redis (embedded) =========
         redis:
           enabled: true
+          architecture: standalone
           auth:
             enabled: false
+          # Force Bitnami image as well
+          image:
+            registry: docker.io
+            repository: bitnami/redis
+            tag: 8.2
   destination: 
     server: https://kubernetes.default.svc
     namespace: authentik
