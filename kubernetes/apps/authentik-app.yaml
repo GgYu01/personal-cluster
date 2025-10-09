@@ -18,22 +18,15 @@ spec:
       values: |
         # ========= Authentik core =========
         authentik:
-          # NOTE: 请替换为 50+ 字符安全随机字符串；首装前可随意，装完后不要变更
           secret_key: "a_very_long_and_random_secret_key_change_me"
-          # 可选：启用匿名错误上报
           error_reporting:
             enabled: false
 
-        # ========= PostgreSQL (嵌入依赖) =========
-        # 新版 chart 默认依赖 bitnami/postgresql 子图，但镜像默认已指向官方 library/postgres
-        # 显式开启，并设置强口令
         postgresql:
           enabled: true
           auth:
-            # NOTE: 请替换为强密码
             password: "a_strong_database_password_change_me"
 
-        # ========= Redis (嵌入依赖) =========
         redis:
           enabled: true
           auth:
