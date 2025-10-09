@@ -1,5 +1,3 @@
-# kubernetes/manifests/frps/config.yaml
-
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,21 +5,21 @@ metadata:
   namespace: frp-system
 data:
   frps.toml: |
-    # --- Core bind (UI) ---
+    # Core bind (UI)
     bindPort = 7001
 
-    # --- Auth (simple) ---
+    # Auth (simple)
     [auth]
     method = "token"
     token = "password"
 
-    # --- Subdomain host for HTTP vhosts ---
+    # Subdomain host for HTTP vhosts
     subdomainHost = "core01.prod.gglohh.top"
 
-    # --- HTTP vhost for browser side (TLS by Traefik) ---
+    # HTTP vhost port (TLS terminated by Traefik)
     vhostHTTPPort = 8080
 
-    # --- Web dashboard (UI) ---
+    # Web dashboard (UI)
     [webServer]
     addr = "0.0.0.0"
     port = 7500
@@ -35,21 +33,21 @@ metadata:
   namespace: frp-system
 data:
   frps.toml: |
-    # --- Core bind (WS) ---
+    # Core bind (WS)
     bindPort = 7002
 
-    # --- Auth (simple) ---
+    # Auth (simple)
     [auth]
     method = "token"
     token = "password"
 
-    # --- Subdomain host for HTTP vhosts ---
+    # Subdomain host for HTTP vhosts
     subdomainHost = "core01.prod.gglohh.top"
 
-    # --- HTTP vhost for WS side (TLS by Traefik) ---
+    # HTTP vhost port (TLS terminated by Traefik)
     vhostHTTPPort = 8081
 
-    # --- Web dashboard (WS) ---
+    # Web dashboard (WS)
     [webServer]
     addr = "0.0.0.0"
     port = 7501

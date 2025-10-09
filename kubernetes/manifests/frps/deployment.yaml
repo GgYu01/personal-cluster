@@ -1,4 +1,3 @@
-# kubernetes/manifests/frps/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +16,7 @@ spec:
       containers:
       - name: frps-ui
         image: snowdreamtech/frps:0.58.1
-        args: ["-c", "/etc/frp/frps.toml"]  # static config
+        args: ["-c", "/etc/frp/frps.toml"]
         ports:
         - containerPort: 7001
           name: frps-bind
@@ -52,7 +51,7 @@ spec:
       containers:
       - name: frps-ws
         image: snowdreamtech/frps:0.58.1
-        args: ["-c", "/etc/frp/frps.toml"]  # static config
+        args: ["-c", "/etc/frp/frps.toml"]
         ports:
         - containerPort: 7002
           name: frps-bind

@@ -254,11 +254,9 @@ diagnose_traefik_values_merge() {
     echo "==== [DIAG] HelmChart kube-system/traefik (full YAML) ===="
     kubectl -n kube-system get helmchart traefik -o yaml 2>/dev/null || true
     echo
-
     echo "==== [DIAG] HelmChartConfig kube-system/traefik (full YAML) ===="
     kubectl -n kube-system get helmchartconfig traefik -o yaml 2>/dev/null || true
     echo
-
     echo "==== [DIAG] /var/lib/rancher/k3s/server/manifests/traefik-config.yaml (if exists) ===="
     if [[ -f /var/lib/rancher/k3s/server/manifests/traefik-config.yaml ]]; then
       sed -n '1,200p' /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
@@ -266,7 +264,6 @@ diagnose_traefik_values_merge() {
       echo "(file not found)"
     fi
     echo
-
     echo "==== [DIAG] Traefik Service (full YAML) ===="
     kubectl -n kube-system get svc traefik -o yaml 2>/dev/null || true
 }
@@ -437,6 +434,22 @@ purge_k3s_namespace_journal() {
 
 # --- [SECTION 3: DEPLOYMENT FUNCTIONS] ---
 
+# --- [NEW] Dump values files used by helm job (inside pod) ---
+dump_helm_job_configs() {
+  local ns="kube-system"; local job="helm-install-traefik"
+  echo "==== [DIAG] Dump Helm job values files (/config) ===="
+  local pod
+  pod="$(kubectl -n "${ns}" get pods --selector=job-name=${job} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null \vert{}\vert{} true)"
+  if [[ -z "${pod}" ]]; then
+    echo "(helm job pod not found)"
+    return 0
+  fi
+  for f in /config/values-0-000-HelmChart-ValuesContent.yaml /config/values-1-000-HelmChartConfig-ValuesContent.yaml; do
+    echo "--- ${f} ---"
+    kubectl -n "${ns}" exec "${pod}" -c helm -- sh -lc "cat ${f}" 2>/dev/null || echo "(missing)"
+  done
+}
+
 function perform_system_cleanup() {
     log_step 1 "System Cleanup"
     log_info "This step will eradicate all traces of previous K3s and this project's ETCD."
@@ -520,8 +533,6 @@ function deploy_etcd() {
 # --- [NEW] Ensure HelmChartConfig(traefik) applied and force helm reinstall ---
 apply_traefik_config_and_redeploy() {
   log_info "Applying HelmChartConfig traefik (explicit kubectl apply to avoid manifest race)..."
-
-  # Render the intended values (must match the desired entryPoints)
   cat > /tmp/traefik-helmchartconfig.yaml <<EOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -540,20 +551,24 @@ spec:
     ports:
       web:
         port: 8000
-        expose: true
+        expose:
+          default: true
         exposedPort: 80
       websecure:
         port: 8443
-        expose: true
+        expose:
+          default: true
         exposedPort: 443
       frpsUi:
         port: ${FRPS_UI_BIND_PORT}
-        expose: true
+        expose:
+          default: true
         exposedPort: ${FRPS_UI_BIND_PORT}
         protocol: TCP
       frpsWs:
         port: ${FRPS_WS_BIND_PORT}
-        expose: true
+        expose:
+          default: true
         exposedPort: ${FRPS_WS_BIND_PORT}
         protocol: TCP
 
@@ -561,30 +576,24 @@ spec:
       - "--entrypoints.websecure.http.tls=true"
 EOF
 
-  # Apply config explicitly
-  if ! kubectl -n kube-system apply -f /tmp/traefik-helmchartconfig.yaml; then
-    log_error_and_exit "Failed to apply HelmChartConfig traefik."
-  fi
+  kubectl -n kube-system apply -f /tmp/traefik-helmchartconfig.yaml
 
-  # Delete existing helm-install-traefik job to force re-run with new values
   log_info "Deleting job/helm-install-traefik (if exists) to trigger reinstall with merged values..."
   kubectl -n kube-system delete job helm-install-traefik --ignore-not-found
 
-  # Wait for helm-controller to recreate the job
   log_info "Waiting for job/helm-install-traefik to be recreated..."
   if ! timeout 180 bash -lc 'until kubectl -n kube-system get job helm-install-traefik >/dev/null 2>&1; do echo "    ... waiting job"; sleep 3; done'; then
     diagnose_traefik_install
     log_error_and_exit "job/helm-install-traefik not recreated."
   fi
 
-  # Wait job to succeed
   log_info "Waiting for job/helm-install-traefik to succeed (post-config apply)..."
   if ! wait_helm_job_success "kube-system" "helm-install-traefik" 600; then
+    dump_helm_job_configs
     diagnose_traefik_install
     log_error_and_exit "job/helm-install-traefik failed after applying HelmChartConfig."
   fi
 
-  # Wait deployment rollout
   log_info "Waiting for Traefik deployment rollout after config applied..."
   if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=120s" "Traefik Deployment rollout (post-config)" 480 10; then
     diagnose_traefik_install
@@ -605,6 +614,7 @@ function install_k3s() {
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")" 
 
     log_info "Creating Traefik HelmChartConfig with CRD provider and frps UI/WS entryPoints..."
+    rm -f /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
     cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -612,7 +622,7 @@ metadata:
   name: traefik
   namespace: kube-system
 spec:
-  valuesContent: \vert{}-
+  valuesContent: |-
     providers:
       kubernetesCRD:
         enabled: true
@@ -623,20 +633,24 @@ spec:
     ports:
       web:
         port: 8000
-        expose: true
+        expose:
+          default: true
         exposedPort: 80
       websecure:
         port: 8443
-        expose: true
+        expose:
+          default: true
         exposedPort: 443
       frpsUi:
         port: ${FRPS_UI_BIND_PORT}
-        expose: true
+        expose:
+          default: true
         exposedPort: ${FRPS_UI_BIND_PORT}
         protocol: TCP
       frpsWs:
         port: ${FRPS_WS_BIND_PORT}
-        expose: true
+        expose:
+          default: true
         exposedPort: ${FRPS_WS_BIND_PORT}
         protocol: TCP
 
@@ -737,10 +751,11 @@ EOF
     # 校验 Service 暴露的端口（80/443/7001/7002）
     log_info "Checking Service/traefik exposes required ports (80, 443, ${FRPS_UI_BIND_PORT}, ${FRPS_WS_BIND_PORT})..."
     local ports_cmd="kubectl -n kube-system get svc traefik -o jsonpath='{.spec.ports[*].port}' | tr ' ' '\n' | sort -n | tr '\n' ' '"
-    if ! run_with_retry "${ports_cmd} | grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} | grep -Eq '\b${FRPS_UI_BIND_PORT}\b' && ${ports_cmd} | grep -Eq '\b${FRPS_WS_BIND_PORT}\b'" \
+    if ! run_with_retry "${ports_cmd} \vert{} grep -Eq '\b80\b' && ${ports_cmd} | grep -Eq '\b443\b' && ${ports_cmd} \vert{} grep -Eq '\b${FRPS_UI_BIND_PORT}\b' && ${ports_cmd} \vert{} grep -Eq '\b${FRPS_WS_BIND_PORT}\b'" \
         "Service/traefik to expose 80,443,${FRPS_UI_BIND_PORT},${FRPS_WS_BIND_PORT}" 240 10; then
         echo "Observed ports: $(eval ${ports_cmd} 2>/dev/null || true)"
         diagnose_traefik_values_merge
+        dump_helm_job_configs
         log_error_and_exit "Traefik Service does not expose required ports (ports missing after forced reinstall)."
     fi
     log_success "Traefik Service exposes 80/443/${FRPS_UI_BIND_PORT}/${FRPS_WS_BIND_PORT}."

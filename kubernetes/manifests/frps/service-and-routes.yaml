@@ -1,4 +1,3 @@
-# kubernetes/manifests/frps/service-and-routes.yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -44,7 +43,7 @@ metadata:
   namespace: frp-system
 spec:
   entryPoints:
-    - frpsUi
+  - frpsUi
   routes:
   - match: HostSNI(`*`)
     services:
@@ -58,7 +57,7 @@ metadata:
   namespace: frp-system
 spec:
   entryPoints:
-    - frpsWs
+  - frpsWs
   routes:
   - match: HostSNI(`*`)
     services:
@@ -74,7 +73,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 spec:
   entryPoints:
-    - websecure
+  - websecure
   routes:
   - kind: Rule
     priority: 10
@@ -95,7 +94,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 spec:
   entryPoints:
-    - websecure
+  - websecure
   routes:
   - kind: Rule
     priority: 1
