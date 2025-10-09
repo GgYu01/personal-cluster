@@ -77,10 +77,12 @@ spec:
     - websecure
   routes:
   - kind: Rule
-    match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`) && Headers(`Upgrade`,`websocket`)
+    priority: 10
+    match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`) && HeadersRegexp(`Upgrade`, `(?i)websocket`)
     services:
     - name: frps-ws-service
       port: 8081
+      passHostHeader: true
   tls:
     secretName: wildcard-core01-prod-gglohh-top-tls
 ---
@@ -96,9 +98,11 @@ spec:
     - websecure
   routes:
   - kind: Rule
-    match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`) && !Headers(`Upgrade`,`websocket`)
+    priority: 1
+    match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`)
     services:
     - name: frps-ui-service
       port: 8080
+      passHostHeader: true
   tls:
     secretName: wildcard-core01-prod-gglohh-top-tls

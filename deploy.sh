@@ -431,7 +431,7 @@ function perform_system_cleanup() {
     log_step 1 "System Cleanup"
     log_info "This step will eradicate all traces of previous K3s and this project's ETCD."
     
-    log_info "Stopping k3s, docker, and containerd services..."
+    log_info "Stopping k3s service and cleaning project-specific artifacts (will NOT stop or affect other Docker services)..."
     systemctl stop k3s.service &>/dev/null || true
     systemctl disable k3s.service &>/dev/null || true
     
@@ -517,7 +517,7 @@ function install_k3s() {
     mkdir -p /var/lib/rancher/k3s/server/manifests
     mkdir -p "$(dirname "${KUBELET_CONFIG_PATH}")" 
 
-    log_info "Creating Traefik HelmChartConfig with CRD provider and frps (7000/TCP) entryPoint..." 
+    log_info "Creating Traefik HelmChartConfig with CRD provider and frps UI/WS entryPoints..."
     cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << 'EOF'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -525,7 +525,7 @@ metadata:
   name: traefik
   namespace: kube-system
 spec:
-  valuesContent: |-
+  valuesContent: \vert{}-
     providers:
       kubernetesCRD:
         enabled: true
@@ -536,20 +536,20 @@ spec:
     ports:
       web:
         port: 8000
+        expose: true
         exposedPort: 80
       websecure:
         port: 8443
+        expose: true
         exposedPort: 443
       frpsUi:
         port: ${FRPS_UI_BIND_PORT}
-        expose:
-          default: true
+        expose: true
         exposedPort: ${FRPS_UI_BIND_PORT}
         protocol: TCP
       frpsWs:
         port: ${FRPS_WS_BIND_PORT}
-        expose:
-          default: true
+        expose: true
         exposedPort: ${FRPS_WS_BIND_PORT}
         protocol: TCP
 
