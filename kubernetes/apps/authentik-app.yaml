@@ -12,7 +12,7 @@ spec:
   source: 
     repoURL: https://charts.goauthentik.io
     chart: authentik
-    targetRevision: 2025.8.4          # 升级到你提供的最新稳定版本
+    targetRevision: 2025.8.4
     helm: 
       releaseName: authentik
       values: |
@@ -21,17 +21,21 @@ spec:
           secret_key: "a_very_long_and_random_secret_key_change_me"
           error_reporting:
             enabled: false
+          # [ADD] Wire application DB password to embedded PostgreSQL
+          postgresql:
+            password: "a_strong_database_password_change_me"
 
+        # ========= PostgreSQL (embedded) =========
         postgresql:
           enabled: true
           auth:
             password: "a_strong_database_password_change_me"
 
+        # ========= Redis (embedded) =========
         redis:
           enabled: true
           auth:
             enabled: false
-
   destination: 
     server: https://kubernetes.default.svc
     namespace: authentik
