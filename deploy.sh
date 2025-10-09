@@ -587,14 +587,14 @@ EOF
   fi
 
   log_info "Waiting for job/helm-install-traefik to succeed (post-config apply)..." 
-  if ! wait_helm_job_success "kube-system" "helm-install-traefik" 600; then
+  if ! wait_helm_job_success "kube-system" "helm-install-traefik" 180; then
     dump_helm_job_configs
     diagnose_traefik_install
     log_error_and_exit "job/helm-install-traefik failed after applying HelmChartConfig." 
   fi
 
   log_info "Waiting for Traefik deployment rollout after config applied..." 
-  if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=120s" "Traefik Deployment rollout (post-config)" 480 10; then
+  if ! run_with_retry "kubectl -n kube-system rollout status deploy/traefik --timeout=120s" "Traefik Deployment rollout (post-config)" 180 10; then
     diagnose_traefik_install
     log_error_and_exit "Traefik Deployment failed to roll out after applying HelmChartConfig." 
   fi
