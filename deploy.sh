@@ -88,6 +88,69 @@ cf_api() {
   fi
 }
 
+preflight_ensure_host_ports_free() {
+  # Check if host ports 80/443 are available for K3s ServiceLB (svclb-traefik).
+  log_step 0 "Preflight: Ensure host ports 80/443 are free"
+  local conflict=0
+  # ss is widely available; fallback to lsof if needed.
+  if ss -lntp 2>/dev/null | egrep -q '(:80\s)|(:443\s)'; then
+    log_warn "Detected listeners on host ports 80/443. Listing:"
+    ss -lntp 2>/dev/null | egrep '(:80\s)|(:443\s)' || true
+    conflict=1
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    if lsof -iTCP:80 -sTCP:LISTEN 2>/dev/null | sed -n '1,200p' | grep -q .; then
+      log_warn "lsof: port 80 is in use"; lsof -iTCP:80 -sTCP:LISTEN 2>/dev/null | sed -n '1,200p'
+      conflict=1
+    fi
+    if lsof -iTCP:443 -sTCP:LISTEN 2>/dev/null | sed -n '1,200p' | grep -q .; then
+      log_warn "lsof: port 443 is in use"; lsof -iTCP:443 -sTCP:LISTEN 2>/dev/null | sed -n '1,200p'
+      conflict=1
+    fi
+  fi
+  if (( conflict == 1 )); then
+    log_error_and_exit "Host ports 80/443 must be free for ServiceLB (svclb-traefik). Please stop the services bound to these ports or integrate an external reverse proxy. Aborting before installation to avoid partial/undefined state."
+  fi
+  log_success "Host ports 80/443 appear free."
+}
+
+verify_servicelb_bindings_and_tcp_443() {
+  # Verify svclb-traefik pods and external TCP reachability on 443
+  log_info "Verifying svclb-traefik pods and TCP:443 external reachability..."
+  # Wait for svclb pods created
+  if ! timeout 150 bash -lc 'until kubectl -n kube-system get pods -l "app=svclb-traefik" --no-headers 2>/dev/null | grep -q .; do echo "    ...waiting svclb-traefik"; sleep 3; done'; then
+    kubectl -n kube-system get pods -l "app=svclb-traefik" -o wide || true
+    log_error_and_exit "svclb-traefik pods not created; ServiceLB may be disabled or failed."
+  fi
+  kubectl -n kube-system get pods -l "app=svclb-traefik" -o wide || true
+
+  # Check pod status
+  local bad=0
+  if kubectl -n kube-system get pods -l "app=svclb-traefik" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}' 2>/dev/null | egrep -v 'Running|Succeeded' | grep -q .; then
+    log_warn "Some svclb-traefik pods are not Running:"
+    kubectl -n kube-system get pods -l "app=svclb-traefik" -o wide
+    bad=1
+  fi
+
+  # Dump failing containers logs (port 443 binding is commonly named lb-443)
+  for p in $(kubectl -n kube-system get pods -l "app=svclb-traefik" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    echo "--- [DIAG] svclb pod logs (pod: ${p}) ---"
+    kubectl -n kube-system logs "${p}" --tail=120 2>/dev/null || true
+  done
+
+  # External TCP reachability to 443
+  local tcp_check_443="timeout 2 bash -lc '</dev/tcp/${VPS_IP}/443' >/dev/null 2>&1"
+  if ! run_with_retry "${tcp_check_443}" "External TCP connectivity to ${VPS_IP}:443" 150 5; then
+    log_error_and_exit "External TCP 443 is not reachable on ${VPS_IP}. Most likely ServiceLB failed to bind 443 on host (port conflict) or iptables/NAT issue."
+  fi
+
+  if (( bad == 1 )); then
+    log_warn "svclb-traefik pods had issues; check logs above. Proceeding since TCP:443 is reachable now."
+  else
+    log_success "svclb-traefik pods Running and TCP:443 reachable."
+  fi
+}
+
 wait_apiserver_ready() { 
   # $1 timeout seconds (default 150), $2 interval seconds (default 5) 
   local timeout_s="${1:-150}" 
@@ -747,6 +810,8 @@ EOF
     # 现在 Traefik 部署应已基于合并后的 values 就绪
     log_success "Traefik Deployment is Ready (with merged HelmChartConfig)."
 
+    verify_servicelb_bindings_and_tcp_443
+
     # journald 日志隔离（best effort）
     configure_k3s_log_namespace
     purge_k3s_namespace_journal
@@ -853,117 +918,82 @@ function bootstrap_gitops() {
     log_success "Argo CD has been bootstrapped and is now self-managing via GitOps."
 }
 
-function deploy_applications() {
-    log_step 5 "Deploy Core Applications via GitOps"
+function deploy_applications() { 
+    log_step 5 "Deploy Core Applications via GitOps" 
 
-    # 1) 仅提交 cert-manager Application
-    log_info "Applying cert-manager Application (only)..."
+    # 1) cert-manager
+    log_info "Applying cert-manager Application (only)..." 
     kubectl apply -f kubernetes/apps/cert-manager-app.yaml
-
-    # 2) API server 就绪门控，避免 Admission 注册过程的瞬时失败
     wait_apiserver_ready 150 5
-
-    # 3) 等待 cert-manager 核心 Deployment 实际就绪（比直接看 Argo Application 更贴近事实）
-    log_info "Waiting for cert-manager Deployments to become Available..."
-    timeout 150 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done'
-    if ! kubectl -n cert-manager rollout status deploy/cert-manager --timeout=7m; then
-    kubectl -n cert-manager describe deploy cert-manager || true
-    kubectl -n cert-manager logs -l app.kubernetes.io/name=cert-manager --tail=150 || true
-    log_error_and_exit "Deployment cert-manager failed to roll out."
-    fi
-    if ! kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=7m; then
-    kubectl -n cert-manager describe deploy cert-manager-webhook || true
-    kubectl -n cert-manager logs -l app.kubernetes.io/name=webhook --tail=150 || true
-    log_error_and_exit "Deployment cert-manager-webhook failed to roll out."
-    fi
+    log_info "Waiting for cert-manager Deployments to become Available..." 
+    timeout 180 bash -lc 'until kubectl -n cert-manager get deploy cert-manager cert-manager-webhook >/dev/null 2>&1; do echo "    ...waiting for cert-manager deployments to appear"; sleep 5; done' 
+    kubectl -n cert-manager rollout status deploy/cert-manager --timeout=7m || { kubectl -n cert-manager describe deploy cert-manager || true; log_error_and_exit "Deployment cert-manager failed to roll out."; }
+    kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=7m || { kubectl -n cert-manager describe deploy cert-manager-webhook || true; log_error_and_exit "Deployment cert-manager-webhook failed to roll out."; }
     log_success "cert-manager core Deployments are Available."
-
-    # 4) 再做一次 apiserver 就绪门控（webhook/CRD 安装后常见波动）
     wait_apiserver_ready 150 5
+    log_info "Waiting for Cert-Manager application to become Healthy in Argo CD..." 
+    run_with_retry "kubectl get application/cert-manager -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Cert-Manager Argo CD App to be Healthy" 100 10 || log_error_and_exit "Cert-Manager deployment via Argo CD failed (not Healthy within timeout)."
 
-    # 5) 从 Argo 视角等待 cert-manager Application Healthy（延长超时以适应首次安装）
-    log_info "Waiting for Cert-Manager application to become Healthy in Argo CD..."
-    if ! run_with_retry "kubectl get application/cert-manager -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "Cert-Manager Argo CD App to be Healthy" 100 10; then
-    kubectl get application/cert-manager -n argocd -o yaml || true
-    kubectl -n cert-manager get pods -o wide || true
-    kubectl -n cert-manager get events --sort-by=.lastTimestamp | tail -n 50 || true
-    kubectl -n argocd get events --sort-by=.lastTimestamp | tail -n 50 || true
-    log_error_and_exit "Cert-Manager deployment via Argo CD failed (not Healthy within timeout)."
-    fi
-    log_success "Cert-Manager application is Healthy in Argo CD."
-
-    log_info "Applying remaining Applications (excluding n8n)..."
-    # frps 独立管理
+    # 2) Apply remaining apps
+    log_info "Applying remaining Applications (excluding n8n)..." 
     kubectl apply -f kubernetes/apps/frps-app.yaml
-    # core-manifests 仅包含 cluster-issuer
     kubectl apply -f kubernetes/apps/core-manifests-app.yaml
-    # 新增两个静态 ingress 应用
     kubectl apply -f kubernetes/apps/argocd-ingress-app.yaml
-
-    # 新增：provisioner 网关 Application
     kubectl apply -f kubernetes/apps/provisioner-app.yaml
 
+    # [ADD] Authentik 主应用先交给 Argo 管理
+    kubectl apply -f kubernetes/apps/authentik-app.yaml
+    # 再应用其静态 Ingress（已有 sync-wave: "20"，但我们也按顺序显式等待）
     kubectl apply -f kubernetes/apps/authentik-ingress-static-app.yaml
 
-    # 逐个等待 Healthy（放宽超时以适应首次签发/拉起）
-    log_info "Waiting for core-manifests application to become Healthy..."
-    if ! run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 150 10; then
-    kubectl get application/core-manifests -n argocd -o yaml || true
-    log_error_and_exit "core-manifests not Healthy."
-    fi
+    # 逐个等待
+    log_info "Waiting for core-manifests application to become Healthy..." 
+    run_with_retry "kubectl get application/core-manifests -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "core-manifests Argo CD App to be Healthy" 150 10 || log_error_and_exit "core-manifests not Healthy."
 
-    log_info "Waiting for argocd-ingress application to become Healthy..."
-    if ! run_with_retry "kubectl get application/argocd-ingress -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "argocd-ingress Argo CD App to be Healthy" 150 10; then
-    kubectl get application/argocd-ingress -n argocd -o yaml || true
-    log_error_and_exit "argocd-ingress not Healthy."
-    fi
+    log_info "Waiting for argocd-ingress application to become Healthy..." 
+    run_with_retry "kubectl get application/argocd-ingress -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "argocd-ingress Argo CD App to be Healthy" 150 10 || log_error_and_exit "argocd-ingress not Healthy."
 
-    # 等待 provisioner Healthy（证书/Ingress 创建可能略慢，放宽超时）
-    log_info "Waiting for provisioner application to become Healthy..."
-    if ! run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 150 10; then
-    kubectl get application/provisioner -n argocd -o yaml || true
-    kubectl -n provisioner get pods -o wide || true
-    kubectl -n provisioner get events --sort-by=.lastTimestamp | tail -n 50 || true
-    log_error_and_exit "provisioner not Healthy."
-    fi
+    log_info "Waiting for provisioner application to become Healthy..." 
+    run_with_retry "kubectl get application/provisioner -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "provisioner Argo CD App to be Healthy" 150 10 || log_error_and_exit "provisioner not Healthy."
     log_success "provisioner application is Healthy."
 
-    log_info "Waiting for authentik-ingress-static application to become Healthy..."
-    if ! run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 150 10; then
-    kubectl get application/authentik-ingress-static -n argocd -o yaml || true
-    log_error_and_exit "authentik-ingress-static not Healthy."
-    fi
+    # [ADD] 等待 authentik 主应用 Healthy，减少 Traefik 报错噪音
+    log_info "Waiting for authentik application to become Healthy..." 
+    run_with_retry "kubectl get application/authentik -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik Argo CD App to be Healthy" 600 10 || { kubectl get application/authentik -n argocd -o yaml || true; log_error_and_exit "authentik not Healthy."; }
 
-    log_success "Remaining applications submitted and Healthy."
+    log_info "Waiting for authentik-ingress-static application to become Healthy..." 
+    run_with_retry "kubectl get application/authentik-ingress-static -n argocd -o jsonpath='{.status.health.status}' | grep -q 'Healthy'" "authentik-ingress-static Argo CD App to be Healthy" 150 10 || log_error_and_exit "authentik-ingress-static not Healthy."
+
+    log_success "Remaining applications submitted and Healthy." 
 }
 
 function final_verification() {
     log_step 6 "Final End-to-End Verification"
     wait_apiserver_ready 150 5
 
-    log_info "Verifying ClusterIssuer 'cloudflare-staging' is ready..."
+    log_info "Verifying ClusterIssuer 'cloudflare-staging' is ready..." 
     if ! run_with_retry "kubectl wait --for=condition=Ready clusterissuer/cloudflare-staging --timeout=2m" "ClusterIssuer to be Ready" 120 10; then
-        log_info "ClusterIssuer did not become ready. Dumping Cert-Manager logs:"
-        kubectl logs -n cert-manager -l app.kubernetes.io/instance=cert-manager --all-containers
-        log_error_and_exit "ClusterIssuer verification failed."
+        kubectl logs -n cert-manager -l app.kubernetes.io/instance=cert-manager --all-containers || true
+        log_error_and_exit "ClusterIssuer verification failed." 
     fi
 
-    log_info "Verifying ArgoCD IngressRoute certificate has been issued..."
+    log_info "Verifying ArgoCD IngressRoute certificate has been issued..." 
     if ! run_with_retry "kubectl wait --for=condition=Ready certificate/argocd-server-tls-staging -n argocd --timeout=5m" "Certificate to be Ready" 150 15; then
-        log_info "Certificate did not become ready. Dumping Cert-Manager logs and describing Certificate:"
-        kubectl logs -n cert-manager -l app.kubernetes.io/instance=cert-manager --all-containers
-        kubectl describe certificate -n argocd argocd-server-tls-staging
-        log_error_and_exit "Certificate issuance failed."
+        kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=120 || true
+        kubectl -n argocd describe certificate argocd-server-tls-staging || true
+        log_error_and_exit "Certificate issuance failed." 
     fi
 
-    log_info "Performing final reachability check on ArgoCD URL: https://${ARGOCD_FQDN}"
-    local check_cmd="curl -k -L -s -o /dev/null -w '%{http_code}' --resolve ${ARGOCD_FQDN}:443:${VPS_IP} https://${ARGOCD_FQDN}/ | grep -q '150'"
-    if ! run_with_retry "${check_cmd}" "ArgoCD UI to be reachable (HTTP 150 OK)" 120 10; then
-        log_info "ArgoCD UI is not reachable or not returning HTTP 150. Dumping Traefik and Argo CD Server logs:"
-        kubectl logs -n kube-system -l app.kubernetes.io/name=traefik
-        kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server
+    log_info "Performing final reachability check on ArgoCD URL: https://${ARGOCD_FQDN}" 
+    local http_log="/tmp/argocd-reachability.$(date +%s).log"
+    local check_cmd="code=\$(curl -k -L -s -o /dev/null -w '%{http_code}' --resolve ${ARGOCD_FQDN}:443:${VPS_IP} https://${ARGOCD_FQDN}/); echo \"ArgoCD HTTP code: \${code}\" | tee -a ${http_log}; test \"\${code}\" = \"200\" -o \"\${code}\" = \"301\" -o \"\${code}\" = \"302\""
+    if ! run_with_retry "${check_cmd}" "ArgoCD UI to be reachable (HTTP 200/301/302)" 120 10; then
+        log_info "ArgoCD UI is not returning 200/301/302. Dumping Traefik and Argo CD Server logs for diagnostics:" 
+        kubectl -n kube-system logs -l app.kubernetes.io/name=traefik --tail=200 || true
+        kubectl -n argocd logs -l app.kubernetes.io/name=argocd-server --tail=200 || true
         log_error_and_exit "End-to-end verification failed."
     fi
+    log_success "ArgoCD is reachable (HTTP 200/301/302)."
 
     log_info "Verifying Provisioner portal Certificate has been issued..."
     if ! run_with_retry "kubectl wait --for=condition=Ready certificate/portal-tls-staging -n provisioner --timeout=5m" "Portal Certificate to be Ready" 150 15; then
@@ -1014,18 +1044,18 @@ function final_verification() {
 main() { 
     # Pre-flight checks
     if [[ $EUID -ne 0 ]]; then log_error_and_exit "This script must be run as root."; fi
-    if ! command -v docker &> /dev/null \vert{}\vert{} ! systemctl is-active --quiet docker; then log_error_and_exit "Docker is not installed or not running."; fi
+    if ! command -v docker &> /dev/null || ! systemctl is-active --quiet docker; then log_error_and_exit "Docker is not installed or not running."; fi
     if ! command -v helm &> /dev/null; then log_error_and_exit "Helm is not installed. Please install Helm to proceed."; fi
     if ! command -v jq &> /dev/null; then log_error_and_exit "Command 'jq' is required but not found."; fi
     if ! command -v dig &> /dev/null; then log_error_and_exit "Command 'dig' is required but not found."; fi
+    if [ ! -d "kubernetes/bootstrap" ] || [ ! -d "kubernetes/apps" ]; then log_error_and_exit "Required directories 'kubernetes/bootstrap' and 'kubernetes/apps' not found. Run from repo root."; fi
 
-    if [ ! -d "kubernetes/bootstrap" ] \vert{}\vert{} [ ! -d "kubernetes/apps" ]; then log_error_and_exit "Required directories 'kubernetes/bootstrap' and 'kubernetes/apps' not found. Run from repo root."; fi
-    
     touch "${LOG_FILE}" &>/dev/null || { echo "FATAL ERROR: Cannot write to log file at ${LOG_FILE}." >&2; exit 1; } 
     exec &> >(tee -a "$LOG_FILE") 
 
     log_info "Deployment Bootstrapper (v23.1) initiated. Full log: ${LOG_FILE}" 
 
+    preflight_ensure_host_ports_free
     ensure_cloudflare_wildcard_a
     perform_system_cleanup
     install_k3s
