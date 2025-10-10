@@ -29,7 +29,6 @@ spec:
         postgresql:
           enabled: true
           image:
-            registry: docker.io
             repository: bitnami/postgresql
             tag: "17"          # <-- FIX: explicit, valid tag in Bitnami repo
           auth:
@@ -61,7 +60,6 @@ spec:
           auth:
             enabled: false
           image:
-            registry: docker.io
             repository: bitnami/redis
             tag: "8.2"         # <-- FIX: explicit, valid tag in Bitnami repo
   destination: 
