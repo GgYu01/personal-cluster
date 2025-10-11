@@ -1,39 +1,44 @@
 # File: kubernetes/apps/authentik-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
-metadata:
+metadata: 
   name: authentik
   namespace: argocd
-spec:
-  source:
+  annotations: 
+    argocd.argoproj.io/sync-wave: "10" 
+spec: 
+  project: default                  # REQUIRED
+  source: 
+    repoURL: https://charts.goauthentik.io   # REQUIRED
     chart: authentik
-    helm:
+    targetRevision: 2025.8.4
+    helm: 
       releaseName: authentik
-      values: |
+      values: | 
         # ========= Authentik core =========
-        authentik:
-          secret_key: "GPJcN5Rt9p6x4zZ6Vw2qk8H0u1Qy3Lb7Md9Xf2Qa5Ws8Er1Ty3Ui7Zo0Bg4Nv6Kx"
-          error_reporting:
+        authentik: 
+          secret_key: "GPJcN5Rt9p6x4zZ6Vw2qk8H0u1Qy3Lb7Md9Xf2Qa5Ws8Er1Ty3Ui7Zo0Bg4Nv6Kx" 
+          error_reporting: 
             enabled: false
-          postgresql:
-            password: "a_strong_database_password_change_me"
-          redis:
-            password: ""
+          postgresql: 
+            password: "a_strong_database_password_change_me" 
+          redis: 
+            password: "" 
 
         # ========= PostgreSQL (embedded) =========
-        postgresql:
+        postgresql: 
           enabled: true
-          auth:
-            username: "authentik"
-            database: "authentik"
-            password: "a_strong_database_password_change_me"
-          primary:
-            args:
+          auth: 
+            username: "authentik" 
+            database: "authentik" 
+            password: "a_strong_database_password_change_me" 
+          primary: 
+            args: 
               - -c
               - config_file=/bitnami/postgresql/conf/postgresql.conf
               - -c
               - hba_file=/bitnami/postgresql/conf/pg_hba.conf
-            configuration: |
+            configuration: | 
               listen_addresses = '*'
               port = '5432'
               wal_level = 'replica'
@@ -45,73 +50,75 @@ spec:
               client_min_messages = 'error'
               include_dir = 'conf.d'
 
-              # low-memory profile
+              # very-low memory profile
               shared_buffers = '16MB'
               effective_cache_size = '96MB'
               maintenance_work_mem = '16MB'
               work_mem = '2MB'
               max_connections = '25'
-            resources:
-              requests:
+
+            resources: 
+              requests: 
                 cpu: 20m
                 memory: 128Mi
-              limits:
-                cpu: "500m"
+              limits: 
+                cpu: "500m" 
                 memory: 256Mi
 
         # ========= Redis (embedded) =========
-        redis:
+        redis: 
           enabled: true
           architecture: standalone
-          auth:
+          auth: 
             enabled: false
-          master:
-            extraFlags:
-              - "--maxmemory 192mb"
-              - "--maxmemory-policy allkeys-lru"
-            resources:
-              requests:
+          master: 
+            extraFlags: 
+              - "--maxmemory 192mb" 
+              - "--maxmemory-policy allkeys-lru" 
+            resources: 
+              requests: 
                 cpu: 20m
                 memory: 96Mi
-              limits:
+              limits: 
                 cpu: 300m
                 memory: 192Mi
 
-        # ========= Server/Worker (probes relaxed) =========
-        server:
-          resources:
-            requests:
+        # ========= Server (probes relaxed TEMP) =========
+        server: 
+          resources: 
+            requests: 
               cpu: 50m
               memory: 128Mi
-            limits:
-              cpu: "700m"
+            limits: 
+              cpu: "700m" 
               memory: 384Mi
 
-          # [TEMP RELAX] disable startup/readiness probes to get pod Ready quickly
+          # TEMP: disable all probes for first run stability
           startupProbe:
-            enabled: false   # was true
+            enabled: false
           readinessProbe:
-            enabled: false   # was true
-          # keep liveness if you want; to be extra tolerant, also disable:
+            enabled: false
           livenessProbe:
-            enabled: false   # was true
+            enabled: false
 
-        worker:
-          resources:
-            requests:
+        # ========= Worker (probes relaxed TEMP) =========
+        worker: 
+          resources: 
+            requests: 
               cpu: 50m
               memory: 96Mi
-            limits:
-              cpu: "500m"
+            limits: 
+              cpu: "500m" 
               memory: 384Mi
 
-          # [TEMP RELAX] disable all probes to avoid PID file healthcheck failures
+          # TEMP: disable all probes for first run stability (PID check causes failures)
           startupProbe:
-            enabled: false   # was true
+            enabled: false
           readinessProbe:
-            enabled: false   # was true
+            enabled: false
           livenessProbe:
-            enabled: false   # was true
+            enabled: false
+
   destination: 
     server: https://kubernetes.default.svc
     namespace: authentik

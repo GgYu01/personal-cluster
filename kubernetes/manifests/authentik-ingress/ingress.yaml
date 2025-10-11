@@ -1,17 +1,18 @@
 # File: kubernetes/manifests/authentik-ingress/ingress.yaml
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
-metadata:
+metadata: 
   name: authentik-https
   namespace: authentik
-spec:
-  entryPoints:
+spec: 
+  entryPoints: 
     - websecure
-  routes:
+  routes: 
     - kind: Rule
-      match: Host(`auth.core01.prod.gglohh.top`)    # clean Host() without hidden chars
-      services:
+      match: Host(`auth.core01.prod.gglohh.top`)          # clean, no hidden chars
+      services: 
         - name: authentik-server
-          port: http                                 # named port as defined in the Service
-  tls:
+          port: 80                                        # numeric port to avoid ambiguity
+          passHostHeader: true
+  tls: 
     secretName: authentik-tls-staging
