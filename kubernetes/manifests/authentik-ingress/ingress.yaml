@@ -1,4 +1,4 @@
-# Code Analysis: Exposes the Authentik service via Traefik, following your existing pattern.
+# File: kubernetes/manifests/authentik-ingress/ingress.yaml
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -8,11 +8,10 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`auth.core01.prod.gglohh.top`)
-      kind: Rule
+    - kind: Rule
+      match: Host(`auth.core01.prod.gglohh.top`)    # clean Host() without hidden chars
       services:
-        # The Authentik helm chart creates a service named 'authentik-server'
         - name: authentik-server
-          port: http
+          port: http                                 # named port as defined in the Service
   tls:
     secretName: authentik-tls-staging
