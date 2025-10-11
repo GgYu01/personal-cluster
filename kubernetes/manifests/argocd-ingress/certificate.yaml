@@ -3,6 +3,8 @@ kind: Certificate
 metadata:
   name: argocd-server-tls-staging
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   secretName: argocd-server-tls-staging
   issuerRef:

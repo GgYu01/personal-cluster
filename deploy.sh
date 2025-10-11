@@ -1093,11 +1093,36 @@ function deploy_applications() {
     kubectl apply -f kubernetes/apps/argocd-ingress-app.yaml
     kubectl apply -f kubernetes/apps/provisioner-app.yaml
 
-    # 3) 依次等待 Healthy（使用鲁棒等待函数，自动处理 apiserver 短暂不可用）
-    log_info "Waiting for core-manifests application to become Healthy..."
-    if ! wait_argocd_app_healthy "core-manifests" 150; then
-      log_error_and_exit "core-manifests not Healthy."
+    # # 3) 依次等待 Healthy（使用鲁棒等待函数，自动处理 apiserver 短暂不可用）
+    # log_info "Waiting for core-manifests application to become Healthy..."
+    # if ! wait_argocd_app_healthy "core-manifests" 150; then
+    #   log_error_and_exit "core-manifests not Healthy."
+    # fi
+
+    log_info "Ensuring ClusterIssuer 'cloudflare-staging' is Ready (pre-check for argocd ingress cert)..."
+    if ! run_with_retry "kubectl get clusterissuer/cloudflare-staging -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' | grep -q True" \
+        "ClusterIssuer 'cloudflare-staging' Ready" 150 10; then
+      kubectl get clusterissuer/cloudflare-staging -o yaml || true
+      kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=120 || true
+      log_error_and_exit "ClusterIssuer 'cloudflare-staging' is not Ready."
     fi
+
+    log_info "Waiting for argocd ingress TLS Certificate to be Ready (argocd-server-tls-staging)..."
+    if ! run_with_retry "kubectl -n argocd get certificate argocd-server-tls-staging -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' | grep -q True" \
+        "Certificate 'argocd-server-tls-staging' Ready" 320 10; then
+      kubectl -n argocd describe certificate argocd-server-tls-staging || true
+      kubectl -n cert-manager logs -l app.kubernetes.io/instance=cert-manager --all-containers --tail=150 || true
+      log_error_and_exit "argocd-server-tls-staging Certificate not Ready within timeout."
+    fi
+    log_success "argocd-server-tls-staging Certificate is Ready."
+
+    log_info "Verifying IngressRoute 'argocd-server-https' presence..."
+    if ! run_with_retry "kubectl -n argocd get ingressroute argocd-server-https >/dev/null 2>&1" \
+        "IngressRoute 'argocd-server-https' present" 150 5; then
+      kubectl -n argocd get ingressroutes.traefik.io -o wide || true
+      log_error_and_exit "IngressRoute 'argocd-server-https' missing."
+    fi
+    log_success "IngressRoute 'argocd-server-https' is present."
 
     log_info "Waiting for argocd-ingress application to become Healthy..."
     if ! wait_argocd_app_healthy "argocd-ingress" 150; then
