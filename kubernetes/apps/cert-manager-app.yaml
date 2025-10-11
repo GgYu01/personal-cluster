@@ -1,59 +1,59 @@
 # File: kubernetes/apps/cert-manager-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
-metadata:
+metadata: 
   name: cert-manager
   namespace: argocd
-spec:
-  source:
+spec: 
+  project: default            # [ADD] required by Argo CD Application CRD
+  source: 
     repoURL: https://charts.jetstack.io
     chart: cert-manager
     targetRevision: v1.18.2
-    helm:
+    helm: 
       releaseName: cert-manager
-      values: |
-        crds:
+      values: | 
+        crds: 
           enabled: true
 
-        startupapicheck:
+        startupapicheck: 
           enabled: true
           timeout: 5m
 
-        prometheus:
+        prometheus: 
           enabled: false
 
-        # Limit controller/webhook/cainjector resources
-        resources:
-          requests:
+        resources: 
+          requests: 
             cpu: 50m
             memory: 128Mi
-          limits:
+          limits: 
             cpu: 300m
             memory: 256Mi
 
-        webhook:
-          resources:
-            requests:
+        webhook: 
+          resources: 
+            requests: 
               cpu: 30m
               memory: 64Mi
-            limits:
+            limits: 
               cpu: 200m
               memory: 128Mi
 
-        cainjector:
-          resources:
-            requests:
+        cainjector: 
+          resources: 
+            requests: 
               cpu: 30m
               memory: 64Mi
-            limits:
+            limits: 
               cpu: 200m
               memory: 128Mi
-  destination:
+  destination: 
     server: https://kubernetes.default.svc
     namespace: cert-manager
-  syncPolicy:
-    automated:
+  syncPolicy: 
+    automated: 
       prune: true
       selfHeal: true
-    syncOptions:
+    syncOptions: 
     - CreateNamespace=true
