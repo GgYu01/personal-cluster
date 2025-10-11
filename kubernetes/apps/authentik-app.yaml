@@ -122,37 +122,37 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 6
 
-        worker: 
-          resources: 
-            requests: 
+        worker:
+          resources:
+            requests:
               cpu: 50m
-              memory: 96Mi                  # was 192Mi
-            limits: 
+              memory: 96Mi             # keep low to ease scheduling on small node
+            limits:
               cpu: "500m"
-              memory: 256Mi                 # was 384Mi
-          startupProbe: 
+              memory: 384Mi            # [INCREASE] was 256Mi; reduce OOM risk
+          startupProbe:
             enabled: true
-            exec: 
-              command: ["ak", "healthcheck"] 
+            exec:
+              command: ["ak", "healthcheck"]
             initialDelaySeconds: 30
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 10        # [INCREASE] was 5; reduce false-negative on slow nodes
             failureThreshold: 120
-          readinessProbe: 
+          readinessProbe:
             enabled: true
-            exec: 
-              command: ["ak", "healthcheck"] 
+            exec:
+              command: ["ak", "healthcheck"]
             initialDelaySeconds: 30
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 10        # [INCREASE] was 5
             failureThreshold: 60
-          livenessProbe: 
+          livenessProbe:
             enabled: true
-            exec: 
-              command: ["ak", "healthcheck"] 
+            exec:
+              command: ["ak", "healthcheck"]
             initialDelaySeconds: 60
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 10        # [INCREASE] was 5
             failureThreshold: 6
   destination: 
     server: https://kubernetes.default.svc
