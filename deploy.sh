@@ -57,7 +57,7 @@ readonly LOG_FILE="$(pwd)/${LOG_FILE_NAME}"
 readonly ARGOCD_FQDN="argocd.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"
 readonly PORTAL_FQDN="portal.${SITE_CODE}.${ENVIRONMENT}.${DOMAIN_NAME}"  # portal.core01.prod.gglohh.top
 readonly KUBELET_CONFIG_PATH="/etc/rancher/k3s/kubelet.config"
-readonly AUTHENTIK_HEALTH_TIMEOUT="${AUTHENTIK_HEALTH_TIMEOUT:-300}"
+readonly AUTHENTIK_HEALTH_TIMEOUT="${AUTHENTIK_HEALTH_TIMEOUT:-500}"
 
 # --- [START OF PASSWORD FIX] ---
 # Statically define the bcrypt hash for the password 'password'.
@@ -596,6 +596,19 @@ purge_k3s_namespace_journal() {
   fi
 }
 
+purge_relevant_service_journals() {
+  # Clean only relevant units; do not touch unrelated services
+  local units=(k3s.service containerd.service kubelet.service)
+  for u in "${units[@]}"; do
+    if systemctl list-units --type=service --all | grep -q " ${u}"; then
+      log_info "Vacuum journald logs for unit ${u} ..."
+      journalctl -u "${u}" --rotate || true
+      journalctl -u "${u}" --vacuum-time=1s || true
+    fi
+  done
+  log_success "Relevant service journals vacuumed (k3s/containerd/kubelet)."
+}
+
 # --- [SECTION 3: DEPLOYMENT FUNCTIONS] ---
 
 # --- [NEW] Dump values files used by helm job (inside pod) ---
@@ -737,6 +750,14 @@ spec:
 
     additionalArguments:
       - "--entrypoints.websecure.http.tls=true"
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 400m
+        memory: 150Mi
 EOF
 
   kubectl -n kube-system apply -f /tmp/traefik-helmchartconfig.yaml
@@ -825,7 +846,33 @@ EOF
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 failSwapOn: false
+
+# Eviction tuning for low-memory node (2.5GB)
+evictionHard:
+  "memory.available": "100Mi"
+  "nodefs.available": "5%"
+  "imagefs.available": "5%"
+  "nodefs.inodesFree": "5%"
+evictionSoft:
+  "memory.available": "200Mi"
+evictionSoftGracePeriod:
+  "memory.available": "1m"
+evictionPressureTransitionPeriod: "30s"
+
+imageGCHighThresholdPercent: 85
+imageGCLowThresholdPercent: 70
+
+kubeReserved:
+  cpu: "100m"
+  memory: "256Mi"
+systemReserved:
+  cpu: "50m"
+  memory: "128Mi"
+
+enforceNodeAllocatable:
+  - "pods"
 EOF
+
     log_success "K3s customization manifests created."
 
     log_info "Installing K3s ${K3S_VERSION}..."
@@ -992,12 +1039,14 @@ function bootstrap_gitops() {
     # This ensures the 'argocd-secret' is created with the correct static password from the very beginning,
     # preventing the creation of the 'argocd-initial-admin-secret' with a random password.
     helm upgrade --install argocd argo/argo-cd \
-        --version 8.2.7 \
-        --namespace argocd --create-namespace \
-        --set-string "server.extraArgs={--insecure}" \
-        --set-string "configs.secret.argocdServerAdminPassword=${ARGOCD_ADMIN_PASSWORD_HASH}" \
-        --set-string "configs.secret.argocdServerAdminPasswordMtime=$(date -u --iso-8601=seconds)" \
-        --wait --timeout=15m
+      --version 8.2.7 \
+      --namespace argocd --create-namespace \
+      --set-string "server.extraArgs={--insecure}" \
+      --set-string "configs.secret.argocdServerAdminPassword=${ARGOCD_ADMIN_PASSWORD_HASH}" \
+      --set-string "configs.secret.argocdServerAdminPasswordMtime=$(date -u --iso-8601=seconds)" \
+      --set "applicationSet.enabled=false" \
+      --set "notifications.enabled=false" \
+      --wait --timeout=15m
     # --- [END OF PASSWORD FIX] ---
 
     log_success "Argo CD components and CRDs installed via Helm with static password."
@@ -1171,7 +1220,10 @@ main() {
     preflight_ensure_host_ports_free
     ensure_cloudflare_wildcard_a
     perform_system_cleanup
+    purge_relevant_service_journals   # add here
+
     install_k3s
+    purge_relevant_service_journals 
     bootstrap_gitops
     deploy_applications
     final_verification

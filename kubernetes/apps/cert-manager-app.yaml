@@ -1,33 +1,53 @@
-# kubernetes/applications/cert-manager.yaml
+# File: kubernetes/apps/cert-manager-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: cert-manager
   namespace: argocd
-  annotations:
-    argocd.argoproj.io/sync-wave: "-10"
 spec:
-  project: default
   source:
     repoURL: https://charts.jetstack.io
     chart: cert-manager
-    targetRevision: v1.18.2 # This is the application version. The chart version will be resolved by Helm.
+    targetRevision: v1.18.2
     helm:
       releaseName: cert-manager
       values: |
-        # --- [START OF CORRECTION] ---
-        # According to the provided official Helm chart documentation, 'installCRDs' is deprecated.
-        # The modern and correct way to ensure CRDs are managed by the Helm chart is using 'crds.enabled'.
         crds:
           enabled: true
-        # --- [END OF CORRECTION] ---
-        
+
         startupapicheck:
           enabled: true
-          # Give it ample time to succeed, especially on slower networks or busy nodes.
           timeout: 5m
+
         prometheus:
           enabled: false
+
+        # Limit controller/webhook/cainjector resources
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+
+        webhook:
+          resources:
+            requests:
+              cpu: 30m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+        cainjector:
+          resources:
+            requests:
+              cpu: 30m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
   destination:
     server: https://kubernetes.default.svc
     namespace: cert-manager

@@ -39,6 +39,7 @@ spec:
               - -c
               - hba_file=/bitnami/postgresql/conf/pg_hba.conf
             configuration: |
+              # minimal memory footprint for low-memory node
               listen_addresses = '*'
               port = '5432'
               wal_level = 'replica'
@@ -49,6 +50,19 @@ spec:
               log_hostname = 'false'
               client_min_messages = 'error'
               include_dir = 'conf.d'
+              # memory tuning
+              shared_buffers = '64MB'
+              effective_cache_size = '192MB'
+              maintenance_work_mem = '32MB'
+              work_mem = '4MB'
+              max_connections = '50'
+            resources:
+              requests:
+                cpu: 50m
+                memory: 256Mi
+              limits:
+                cpu: "1"
+                memory: 512Mi
 
         # ========= Redis (embedded) =========
         redis:
@@ -56,12 +70,94 @@ spec:
           architecture: standalone
           auth:
             enabled: false
-  destination: 
+          master:
+            # limit memory growth inside Redis process
+            extraFlags:
+              - "--maxmemory 192mb"
+              - "--maxmemory-policy allkeys-lru"
+            resources:
+              requests:
+                cpu: 25m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 256Mi
+
+        # ========= Server/Worker probes & resources (low footprint + high tolerance) =========
+        server:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            enabled: true
+            httpGet:
+              path: /-/health/live/
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            enabled: true
+            httpGet:
+              path: /-/health/ready/
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            enabled: true
+            httpGet:
+              path: /-/health/live/
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+        worker:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 192Mi
+            limits:
+              cpu: "1"
+              memory: 384Mi
+          startupProbe:
+            enabled: true
+            exec:
+              command: ["ak", "healthcheck"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            enabled: true
+            exec:
+              command: ["ak", "healthcheck"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            enabled: true
+            exec:
+              command: ["ak", "healthcheck"]
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+  destination:
     server: https://kubernetes.default.svc
     namespace: authentik
-  syncPolicy: 
-    automated: 
+  syncPolicy:
+    automated:
       prune: true
       selfHeal: true
-    syncOptions: 
+    syncOptions:
     - CreateNamespace=true
