@@ -1,9 +1,7 @@
-# File: kubernetes/manifests/authentik-ingress/servers-transport.yaml
 apiVersion: traefik.io/v1alpha1
 kind: ServersTransport
 metadata:
   name: authentik-insecure
   namespace: authentik
 spec:
-  # allow backend https with self-signed cert
-  insecureSkipVerify: true
+  insecureSkipVerify: true   # backend https with self-signed cert

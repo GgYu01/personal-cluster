@@ -66,42 +66,42 @@ spec:
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
-metadata:
+metadata: 
   name: frps-ws-http-ingress
   namespace: frp-system
-  annotations:
-    argocd.argoproj.io/sync-wave: "1"
-spec:
-  entryPoints:
-  - websecure
-  routes:
-  - kind: Rule
-    priority: 10
-    match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`) && HeadersRegexp(`Upgrade`, `(?i)websocket`)
-    services:
-    - name: frps-ws-service
-      port: 8081
-      passHostHeader: true
-  tls:
+  annotations: 
+    argocd.argoproj.io/sync-wave: "1" 
+spec: 
+  entryPoints: 
+    - websecure
+  routes: 
+    - kind: Rule
+      priority: 5
+      match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`) && HeaderRegexp(`Upgrade`, `(?i)websocket`)  # v3: HeaderRegexp
+      services: 
+        - name: frps-ws-service
+          port: 8081
+          passHostHeader: true
+  tls: 
     secretName: wildcard-core01-prod-gglohh-top-tls
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
-metadata:
+metadata: 
   name: frps-ui-http-ingress
   namespace: frp-system
-  annotations:
-    argocd.argoproj.io/sync-wave: "1"
-spec:
-  entryPoints:
-  - websecure
-  routes:
-  - kind: Rule
-    priority: 1
-    match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`)
-    services:
-    - name: frps-ui-service
-      port: 8080
-      passHostHeader: true
-  tls:
+  annotations: 
+    argocd.argoproj.io/sync-wave: "1" 
+spec: 
+  entryPoints: 
+    - websecure
+  routes: 
+    - kind: Rule
+      priority: 1
+      match: HostRegexp(`.+\.core01\.prod\.gglohh\.top`)         # CLEAN
+      services: 
+        - name: frps-ui-service
+          port: 8080
+          passHostHeader: true
+  tls: 
     secretName: wildcard-core01-prod-gglohh-top-tls
