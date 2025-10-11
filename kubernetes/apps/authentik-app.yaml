@@ -28,9 +28,6 @@ spec:
         # ========= PostgreSQL (embedded) =========
         postgresql:
           enabled: true
-          image:
-            repository: bitnami/postgresql
-            tag: "17"          # <-- FIX: explicit, valid tag in Bitnami repo
           auth:
             username: "authentik"
             database: "authentik"
@@ -59,9 +56,6 @@ spec:
           architecture: standalone
           auth:
             enabled: false
-          image:
-            repository: bitnami/redis
-            tag: "8.2"         # <-- FIX: explicit, valid tag in Bitnami repo
   destination: 
     server: https://kubernetes.default.svc
     namespace: authentik
