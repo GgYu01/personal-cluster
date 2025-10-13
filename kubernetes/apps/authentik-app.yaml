@@ -1,44 +1,40 @@
-# File: kubernetes/apps/authentik-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
-metadata: 
+metadata:
   name: authentik
   namespace: argocd
-  annotations: 
-    argocd.argoproj.io/sync-wave: "10" 
-spec: 
-  project: default                  # REQUIRED
-  source: 
-    repoURL: https://charts.goauthentik.io   # REQUIRED
+spec:
+  source:
+    repoURL: https://charts.goauthentik.io
     chart: authentik
     targetRevision: 2025.8.4
-    helm: 
+    helm:
       releaseName: authentik
-      values: | 
+      values: |
         # ========= Authentik core =========
-        authentik: 
-          secret_key: "GPJcN5Rt9p6x4zZ6Vw2qk8H0u1Qy3Lb7Md9Xf2Qa5Ws8Er1Ty3Ui7Zo0Bg4Nv6Kx" 
-          error_reporting: 
+        authentik:
+          secret_key: "GPJcN5Rt9p6x4zZ6Vw2qk8H0u1Qy3Lb7Md9Xf2Qa5Ws8Er1Ty3Ui7Zo0Bg4Nv6Kx"
+          error_reporting:
             enabled: false
-          postgresql: 
-            password: "a_strong_database_password_change_me" 
-          redis: 
-            password: "" 
+          postgresql:
+            password: "a_strong_database_password_change_me"
+          redis:
+            password: ""
 
         # ========= PostgreSQL (embedded) =========
-        postgresql: 
+        postgresql:
           enabled: true
-          auth: 
-            username: "authentik" 
-            database: "authentik" 
-            password: "a_strong_database_password_change_me" 
-          primary: 
-            args: 
+          auth:
+            username: "authentik"
+            database: "authentik"
+            password: "a_strong_database_password_change_me"
+          primary:
+            args:
               - -c
               - config_file=/bitnami/postgresql/conf/postgresql.conf
               - -c
               - hba_file=/bitnami/postgresql/conf/pg_hba.conf
-            configuration: | 
+            configuration: |
               listen_addresses = '*'
               port = '5432'
               wal_level = 'replica'
@@ -56,68 +52,104 @@ spec:
               maintenance_work_mem = '16MB'
               work_mem = '2MB'
               max_connections = '25'
-
-            resources: 
-              requests: 
+            resources:
+              requests:
                 cpu: 20m
                 memory: 128Mi
-              limits: 
-                cpu: "500m" 
+              limits:
+                cpu: "500m"
                 memory: 256Mi
 
         # ========= Redis (embedded) =========
-        redis: 
+        redis:
           enabled: true
           architecture: standalone
-          auth: 
+          auth:
             enabled: false
-          master: 
-            extraFlags: 
-              - "--maxmemory 192mb" 
-              - "--maxmemory-policy allkeys-lru" 
-            resources: 
-              requests: 
+          master:
+            extraFlags:
+              - "--maxmemory 192mb"
+              - "--maxmemory-policy allkeys-lru"
+            resources:
+              requests:
                 cpu: 20m
                 memory: 96Mi
-              limits: 
+              limits:
                 cpu: 300m
                 memory: 192Mi
 
-        # ========= Server (probes relaxed TEMP) =========
-        server: 
-          resources: 
-            requests: 
-              cpu: 50m
-              memory: 128Mi
-            limits: 
-              cpu: "700m" 
-              memory: 384Mi
+        # ========= Server (probes tuned for first-run) =========
+        server:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "700m"
+              memory: 768Mi
+          probes:
+            startup:
+              enabled: true
+              httpGet:
+                path: /-/health/live/
+                port: http
+              initialDelaySeconds: 120
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 120
+            readiness:
+              enabled: true
+              httpGet:
+                path: /-/health/ready/
+                port: http
+              initialDelaySeconds: 60
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 30
+            liveness:
+              enabled: true
+              httpGet:
+                path: /-/health/live/
+                port: http
+              initialDelaySeconds: 60
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 12
 
-          # TEMP: disable all probes for first run stability
-          startupProbe:
-            enabled: false
-          readinessProbe:
-            enabled: false
-          livenessProbe:
-            enabled: false
-
-        # ========= Worker (probes relaxed TEMP) =========
-        worker: 
-          resources: 
-            requests: 
-              cpu: 50m
-              memory: 96Mi
-            limits: 
-              cpu: "500m" 
-              memory: 384Mi
-
-          # TEMP: disable all probes for first run stability (PID check causes failures)
-          startupProbe:
-            enabled: false
-          readinessProbe:
-            enabled: false
-          livenessProbe:
-            enabled: false
+        # ========= Worker (probes tuned; bump memory to avoid OOM) =========
+        worker:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: "700m"
+              memory: 768Mi
+          probes:
+            startup:
+              enabled: true
+              exec:
+                command: ["ak", "healthcheck"]   # use built-in healthcheck
+              initialDelaySeconds: 120
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 120
+            readiness:
+              enabled: true
+              exec:
+                command: ["ak", "healthcheck"]
+              initialDelaySeconds: 60
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 30
+            liveness:
+              enabled: true
+              exec:
+                command: ["ak", "healthcheck"]
+              initialDelaySeconds: 60
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 12
 
   destination: 
     server: https://kubernetes.default.svc
